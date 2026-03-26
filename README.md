@@ -4,13 +4,15 @@ A Go service that bridges SIP and WebRTC voice calls with multi-party audio mixi
 
 ## Features
 
-- **SIP inbound & outbound** -- receive and originate SIP calls with codec negotiation (PCMU, PCMA, G.722, Opus), session timers (RFC 4028)
-- **WebRTC** -- browser-based voice via SDP offer/answer (PCMU at 8 kHz)
+- **SIP inbound & outbound** -- receive and originate SIP calls with codec negotiation (PCMU, PCMA, G.722, Opus), digest auth, session timers (RFC 4028)
+- **Early media** -- SIP 183 Session Progress with SDP for pre-answer audio (custom ringback, IVR)
+- **Hold/unhold** -- SIP re-INVITE with sendonly/sendrecv direction
+- **WebRTC** -- browser-based voice via SDP offer/answer with trickle ICE
 - **Multi-party rooms** -- mix N participants with mixed-minus-self audio at 16 kHz
 - **WebSocket room access** -- join rooms from any client over a WebSocket with base64 PCM frames
 - **DTMF** -- send and receive RFC 4733 telephone-events
 - **Recording** -- stereo WAV recording per-leg or per-room, with optional S3 upload
-- **Playback** -- stream WAV/MP3 audio into legs or rooms
+- **Playback** -- stream WAV/MP3 audio or built-in telephone tones into legs or rooms
 - **TTS** -- text-to-speech into legs or rooms (ElevenLabs, Google Cloud, AWS Polly)
 - **STT** -- real-time speech-to-text with partial transcripts (ElevenLabs)
 - **AI Agent** -- attach a conversational AI agent to a leg or room (ElevenLabs, VAPI, Pipecat)
@@ -44,7 +46,8 @@ All configuration is via environment variables:
 | `RECORDING_DIR` | `/tmp/recordings` | Local recording output directory |
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `WEBHOOK_URL` | | Default webhook URL for inbound calls |
-| `ELEVENLABS_API_KEY` | | API key for TTS, STT, and Agent features |
+| `ELEVENLABS_API_KEY` | | API key for ElevenLabs TTS, STT, and Agent |
+| `VAPI_API_KEY` | | API key for VAPI Agent provider |
 | `S3_BUCKET` | | S3 bucket for recording uploads |
 | `S3_REGION` | `us-east-1` | AWS region |
 | `S3_ENDPOINT` | | Custom S3 endpoint (MinIO, etc.) |
@@ -61,15 +64,22 @@ POST   /v1/legs                    # Originate outbound SIP call
 GET    /v1/legs                    # List all legs
 GET    /v1/legs/{id}               # Get leg details
 POST   /v1/legs/{id}/answer        # Answer ringing inbound leg
+POST   /v1/legs/{id}/early-media   # Enable early media (183)
 DELETE /v1/legs/{id}               # Hang up
 POST   /v1/legs/{id}/mute          # Mute
 DELETE /v1/legs/{id}/mute          # Unmute
+POST   /v1/legs/{id}/hold          # Put on hold
+DELETE /v1/legs/{id}/hold          # Resume from hold
 POST   /v1/legs/{id}/dtmf          # Send DTMF digits
-POST   /v1/legs/{id}/play          # Play audio
+POST   /v1/legs/{id}/play          # Play audio or tone
+DELETE /v1/legs/{id}/play/{pbID}   # Stop playback
 POST   /v1/legs/{id}/tts           # Text-to-speech
 POST   /v1/legs/{id}/record        # Start recording
+DELETE /v1/legs/{id}/record        # Stop recording
 POST   /v1/legs/{id}/stt           # Start speech-to-text
+DELETE /v1/legs/{id}/stt           # Stop speech-to-text
 POST   /v1/legs/{id}/agent         # Attach AI agent
+DELETE /v1/legs/{id}/agent         # Detach AI agent
 ```
 
 ### Rooms
@@ -82,17 +92,28 @@ DELETE /v1/rooms/{id}              # Delete room (hangs up all legs)
 POST   /v1/rooms/{id}/legs         # Add leg to room
 DELETE /v1/rooms/{id}/legs/{legID} # Remove leg from room
 GET    /v1/rooms/{id}/ws           # Join room via WebSocket
-POST   /v1/rooms/{id}/play         # Play audio to room
+POST   /v1/rooms/{id}/play         # Play audio or tone to room
+DELETE /v1/rooms/{id}/play/{pbID}  # Stop room playback
 POST   /v1/rooms/{id}/tts          # TTS to room
 POST   /v1/rooms/{id}/record       # Record room mix
+DELETE /v1/rooms/{id}/record       # Stop room recording
 POST   /v1/rooms/{id}/stt          # STT on all participants
+DELETE /v1/rooms/{id}/stt          # Stop room STT
 POST   /v1/rooms/{id}/agent        # Attach AI agent to room
+DELETE /v1/rooms/{id}/agent        # Detach AI agent from room
 ```
 
-### WebRTC & Webhooks
+### WebRTC
 
 ```
-POST   /v1/webrtc/offer            # SDP offer/answer exchange
+POST   /v1/webrtc/offer                    # SDP offer/answer exchange
+POST   /v1/legs/{id}/ice-candidates        # Add trickle ICE candidate
+GET    /v1/legs/{id}/ice-candidates        # Get gathered ICE candidates
+```
+
+### Webhooks
+
+```
 POST   /v1/webhooks                # Register webhook
 GET    /v1/webhooks                # List webhooks
 DELETE /v1/webhooks/{id}           # Unregister webhook
