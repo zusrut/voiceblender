@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/csiwek/VoiceBlender/internal/events"
-	"github.com/csiwek/VoiceBlender/internal/leg"
-	"github.com/csiwek/VoiceBlender/internal/mixer"
-	"github.com/csiwek/VoiceBlender/internal/playback"
-	"github.com/csiwek/VoiceBlender/internal/room"
+	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
+	"github.com/VoiceBlender/voiceblender/internal/playback"
+	"github.com/VoiceBlender/voiceblender/internal/room"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

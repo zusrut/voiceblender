@@ -15,8 +15,8 @@ import (
 
 	"errors"
 
-	"github.com/csiwek/VoiceBlender/internal/codec"
-	sipmod "github.com/csiwek/VoiceBlender/internal/sip"
+	"github.com/VoiceBlender/voiceblender/internal/codec"
+	sipmod "github.com/VoiceBlender/voiceblender/internal/sip"
 	"github.com/emiago/sipgo/sip"
 	"github.com/google/uuid"
 	"github.com/pion/rtp"

@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/csiwek/VoiceBlender/internal/events"
-	"github.com/csiwek/VoiceBlender/internal/leg"
-	"github.com/csiwek/VoiceBlender/internal/mixer"
-	"github.com/csiwek/VoiceBlender/internal/stt"
+	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
+	"github.com/VoiceBlender/voiceblender/internal/stt"
 	"github.com/go-chi/chi/v5"
 )
 

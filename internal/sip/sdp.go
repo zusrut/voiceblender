@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/csiwek/VoiceBlender/internal/codec"
+	"github.com/VoiceBlender/voiceblender/internal/codec"
 	pionsdp "github.com/pion/sdp/v3"
 )
 

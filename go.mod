@@ -1,4 +1,4 @@
-module github.com/csiwek/VoiceBlender
+module github.com/VoiceBlender/voiceblender
 
 go 1.25
 

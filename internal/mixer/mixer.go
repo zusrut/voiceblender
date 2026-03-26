@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/csiwek/VoiceBlender/internal/comfortnoise"
+	"github.com/VoiceBlender/voiceblender/internal/comfortnoise"
 )
 
 var errWriterClosed = errors.New("writer closed")

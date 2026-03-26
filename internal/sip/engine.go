@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net"
 
-	"github.com/csiwek/VoiceBlender/internal/codec"
+	"github.com/VoiceBlender/voiceblender/internal/codec"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )

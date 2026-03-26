@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/csiwek/VoiceBlender/internal/playback"
+	"github.com/VoiceBlender/voiceblender/internal/playback"
 )
 
 func main() {

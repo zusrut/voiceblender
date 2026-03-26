@@ -5,9 +5,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/csiwek/VoiceBlender/internal/events"
-	"github.com/csiwek/VoiceBlender/internal/playback"
-	"github.com/csiwek/VoiceBlender/internal/tts"
+	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/playback"
+	"github.com/VoiceBlender/voiceblender/internal/tts"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

@@ -16,7 +16,7 @@ import (
 
 	mp3 "github.com/hajimehoshi/go-mp3"
 
-	"github.com/csiwek/VoiceBlender/internal/mixer"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
 	"github.com/zaf/g711"
 )
 

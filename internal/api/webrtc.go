@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/csiwek/VoiceBlender/internal/events"
-	"github.com/csiwek/VoiceBlender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/leg"
 	"github.com/go-chi/chi/v5"
 	"github.com/pion/webrtc/v4"
 )

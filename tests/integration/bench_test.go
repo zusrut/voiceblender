@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/csiwek/VoiceBlender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/leg"
 	"github.com/google/uuid"
 )
 

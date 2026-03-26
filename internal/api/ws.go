@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/csiwek/VoiceBlender/internal/mixer"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
 	"github.com/go-chi/chi/v5"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"

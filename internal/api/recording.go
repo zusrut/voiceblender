@@ -9,11 +9,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/csiwek/VoiceBlender/internal/events"
-	"github.com/csiwek/VoiceBlender/internal/leg"
-	"github.com/csiwek/VoiceBlender/internal/mixer"
-	"github.com/csiwek/VoiceBlender/internal/recording"
-	"github.com/csiwek/VoiceBlender/internal/storage"
+	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
+	"github.com/VoiceBlender/voiceblender/internal/recording"
+	"github.com/VoiceBlender/voiceblender/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
