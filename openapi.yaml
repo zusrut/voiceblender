@@ -271,6 +271,46 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /legs/{id}/deaf:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: deafLeg
+            summary: Deafen a leg
+            description: A deaf leg does not receive mixed audio from the room — the participant cannot hear other participants. The leg can still speak (its audio is still mixed for others).
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg deafened
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: undeafLeg
+            summary: Undeafen a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg undeafened
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
     /legs/{id}/hold:
         parameters:
             - $ref: '#/components/parameters/LegId'
@@ -1743,7 +1783,7 @@ components:
                 instance_id:
                     type: string
                     description: Instance identifier
-                leg_id:
+                id:
                     type: string
                     description: Unique leg identifier (UUID)
                 type:
@@ -1767,7 +1807,10 @@ components:
                     description: Room ID if the leg is in a room, empty otherwise
                 muted:
                     type: boolean
-                    description: Whether the leg is muted
+                    description: Whether the leg is muted (cannot be heard by others)
+                deaf:
+                    type: boolean
+                    description: Whether the leg is deaf (cannot hear others)
                 held:
                     type: boolean
                     description: Whether the call is on hold (SIP legs only)
@@ -1777,10 +1820,11 @@ components:
                         type: string
                     description: X-* headers from the inbound INVITE. Only present on sip_inbound legs.
             required:
-                - leg_id
+                - id
                 - type
                 - state
                 - muted
+                - deaf
                 - held
         Room:
             type: object
@@ -2172,6 +2216,8 @@ components:
                 - leg.left_room
                 - leg.muted
                 - leg.unmuted
+                - leg.deaf
+                - leg.undeaf
                 - leg.hold
                 - leg.unhold
                 - dtmf.received
@@ -2389,6 +2435,32 @@ x-webhooks:
     leg.unmuted:
         post:
             summary: Leg unmuted
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+    leg.deaf:
+        post:
+            summary: Leg deafened
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+    leg.undeaf:
+        post:
+            summary: Leg undeafened
             requestBody:
                 content:
                     application/json:

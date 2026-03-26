@@ -68,6 +68,8 @@ type Leg interface {
 	SetRoomID(id string)
 	IsMuted() bool
 	SetMuted(muted bool)
+	IsDeaf() bool
+	SetDeaf(deaf bool)
 	IsHeld() bool
 	CreatedAt() time.Time
 	AnsweredAt() time.Time

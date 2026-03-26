@@ -58,9 +58,12 @@ func (r *Room) AddLeg(l leg.Leg) {
 			mixer.NewResampleReader(reader, legRate, mixRate),
 			mixer.NewResampleWriter(writer, mixRate, legRate),
 		)
-		// Sync mute state so legs muted before room join stay muted in mixer.
+		// Sync mute/deaf state so legs muted/deafened before room join stay that way in mixer.
 		if l.IsMuted() {
 			r.mix.SetParticipantMuted(l.ID(), true)
+		}
+		if l.IsDeaf() {
+			r.mix.SetParticipantDeaf(l.ID(), true)
 		}
 	}
 

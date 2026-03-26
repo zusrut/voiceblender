@@ -40,6 +40,7 @@ type SIPLeg struct {
 	cancel     context.CancelFunc
 	roomID     string
 	muted      atomic.Bool
+	deaf       atomic.Bool
 	createdAt  time.Time
 	answeredAt time.Time // zero if never answered
 	answerCh      chan struct{} // signaled by REST answer endpoint (inbound only)
@@ -306,6 +307,8 @@ func (l *SIPLeg) SetRoomID(id string) {
 
 func (l *SIPLeg) IsMuted() bool    { return l.muted.Load() }
 func (l *SIPLeg) SetMuted(m bool)  { l.muted.Store(m) }
+func (l *SIPLeg) IsDeaf() bool     { return l.deaf.Load() }
+func (l *SIPLeg) SetDeaf(d bool)   { l.deaf.Store(d) }
 
 func (l *SIPLeg) CreatedAt() time.Time { return l.createdAt }
 

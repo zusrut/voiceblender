@@ -64,21 +64,23 @@ var sipAuthFields = map[string]FieldEnrichment{
 
 // LegView is the JSON representation of a leg.
 type LegView struct {
-	ID         string            `json:"leg_id"`
+	ID         string            `json:"id"`
 	Type       leg.LegType       `json:"type"`
 	State      leg.LegState      `json:"state"`
 	RoomID     string            `json:"room_id,omitempty"`
 	Muted      bool              `json:"muted"`
+	Deaf       bool              `json:"deaf"`
 	Held       bool              `json:"held"`
 	SIPHeaders map[string]string `json:"sip_headers,omitempty"`
 }
 
 var legViewFields = map[string]FieldEnrichment{
-	"leg_id":      {Description: "Unique leg identifier (UUID)"},
+	"id":          {Description: "Unique leg identifier (UUID)"},
 	"type":        {Description: "Leg type", Enum: []string{"sip_inbound", "sip_outbound", "webrtc"}},
 	"state":       {Description: "Leg state", Enum: []string{"ringing", "early_media", "connected", "held", "hung_up"}},
 	"room_id":     {Description: "Room ID if the leg is in a room, empty otherwise"},
-	"muted":       {Description: "Whether the leg is muted"},
+	"muted":       {Description: "Whether the leg is muted (cannot be heard by others)"},
+	"deaf":        {Description: "Whether the leg is deaf (cannot hear others)"},
 	"held":        {Description: "Whether the call is on hold (SIP legs only)"},
 	"sip_headers": {Description: "X-* headers from the inbound INVITE. Only present on sip_inbound legs."},
 }

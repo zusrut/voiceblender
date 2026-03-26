@@ -37,6 +37,7 @@ type WebRTCLeg struct {
 	cancel     context.CancelFunc
 	roomID     string
 	muted      atomic.Bool
+	deaf       atomic.Bool
 	createdAt  time.Time
 
 	// Ring buffers for mixer integration
@@ -98,6 +99,8 @@ func (l *WebRTCLeg) SetRoomID(id string) {
 
 func (l *WebRTCLeg) IsMuted() bool    { return l.muted.Load() }
 func (l *WebRTCLeg) SetMuted(m bool)  { l.muted.Store(m) }
+func (l *WebRTCLeg) IsDeaf() bool     { return l.deaf.Load() }
+func (l *WebRTCLeg) SetDeaf(d bool)   { l.deaf.Store(d) }
 func (l *WebRTCLeg) IsHeld() bool     { return false }
 
 func (l *WebRTCLeg) CreatedAt() time.Time  { return l.createdAt }

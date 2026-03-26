@@ -14,11 +14,12 @@ A **leg** represents one side of a voice call — either a SIP dialog or a WebRT
 
 ```json
 {
-  "leg_id": "550e8400-e29b-41d4-a716-446655440000",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
   "type": "sip_inbound",
   "state": "connected",
   "room_id": "room-123",
   "muted": false,
+  "deaf": false,
   "held": false,
   "sip_headers": {
     "X-Correlation-ID": "abc-123"
@@ -28,11 +29,12 @@ A **leg** represents one side of a voice call — either a SIP dialog or a WebRT
 
 | Field | Type | Values |
 |-------|------|--------|
-| `leg_id` | string | UUID |
+| `id` | string | UUID |
 | `type` | string | `sip_inbound`, `sip_outbound`, `webrtc` |
 | `state` | string | `ringing`, `early_media`, `connected`, `held`, `hung_up` |
 | `room_id` | string | Room ID if assigned, empty otherwise |
-| `muted` | boolean | `true` if the leg is muted |
+| `muted` | boolean | `true` if the leg is muted (cannot be heard by others) |
+| `deaf` | boolean | `true` if the leg is deaf (cannot hear others) |
 | `held` | boolean | `true` if the call is on hold (SIP legs only) |
 | `sip_headers` | object | `X-*` headers from the inbound INVITE. Only present on `sip_inbound` legs. |
 
@@ -170,6 +172,36 @@ Unmute a leg.
 
 ```json
 { "status": "unmuted" }
+```
+
+**Errors:** `404` — Leg not found
+
+---
+
+### POST /v1/legs/{id}/deaf
+
+Deafen a leg. A deaf leg does not receive mixed audio from the room — the participant cannot hear other participants. The leg can still speak (its audio is still mixed for others).
+
+**Request:** Empty body
+
+**Response:** `200 OK`
+
+```json
+{ "status": "deaf" }
+```
+
+**Errors:** `404` — Leg not found
+
+---
+
+### DELETE /v1/legs/{id}/deaf
+
+Undeafen a leg. Restores the participant's ability to hear other participants.
+
+**Response:** `200 OK`
+
+```json
+{ "status": "undeaf" }
 ```
 
 **Errors:** `404` — Leg not found
@@ -720,7 +752,7 @@ A **room** is a multi-party audio conference. Legs added to a room hear mixed au
 {
   "id": "room-123",
   "participants": [
-    { "leg_id": "leg-uuid", "type": "sip_inbound", "state": "connected", "room_id": "room-123" }
+    { "id": "leg-uuid", "type": "sip_inbound", "state": "connected", "room_id": "room-123" }
   ]
 }
 ```
@@ -1442,6 +1474,8 @@ All event data uses typed structs with consistent field names. Events scoped to 
 | `leg.left_room` | Leg removed from room | `leg_id`, `room_id` |
 | `leg.muted` | Leg muted | `leg_id` |
 | `leg.unmuted` | Leg unmuted | `leg_id` |
+| `leg.deaf` | Leg deafened | `leg_id` |
+| `leg.undeaf` | Leg undeafened | `leg_id` |
 | `leg.hold` | Leg put on hold (local or remote) | `leg_id`, `leg_type` |
 | `leg.unhold` | Leg taken off hold (local or remote) | `leg_id`, `leg_type` |
 | `dtmf.received` | DTMF digit received | `leg_id`, `digit` |

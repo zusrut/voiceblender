@@ -60,6 +60,14 @@ type LegUnmutedData struct {
 	LegScope
 }
 
+type LegDeafData struct {
+	LegScope
+}
+
+type LegUndeafData struct {
+	LegScope
+}
+
 type LegHoldData struct {
 	LegScope
 	LegType string `json:"leg_type"`

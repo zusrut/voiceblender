@@ -62,6 +62,10 @@ type Participant struct {
 	// and suppresses speaking events. Lock-free via atomic.
 	Muted atomic.Bool
 
+	// Deaf prevents this participant from receiving mixed-minus-self output.
+	// The participant can still speak (contribute audio) but cannot hear others.
+	Deaf atomic.Bool
+
 	// inject receives PCM frames that are mixed into this participant's
 	// output only (not heard by others). Used for per-leg playback while
 	// the leg is in a room — the playback audio is added to the
@@ -181,6 +185,19 @@ func (m *Mixer) SetParticipantMuted(id string, muted bool) {
 	if forceStopped && cb != nil {
 		cb(SpeakingEvent{ParticipantID: id, Speaking: false})
 	}
+}
+
+// SetParticipantDeaf sets the deaf state for a participant. When deaf,
+// the participant does not receive mixed-minus-self output (cannot hear
+// other participants). The participant can still speak.
+func (m *Mixer) SetParticipantDeaf(id string, deaf bool) {
+	m.mu.Lock()
+	p, ok := m.participants[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	p.Deaf.Store(deaf)
 }
 
 // InjectWriter returns an io.Writer that feeds PCM frames into the
@@ -484,7 +501,7 @@ func (m *Mixer) mixTick() {
 	// Enqueue mixed-minus-self for each participant (non-blocking).
 	// The dedicated writeLoop goroutine handles the actual IO.
 	for i, p := range parts {
-		if p.WriteOnly || p.Writer == nil {
+		if p.WriteOnly || p.Writer == nil || p.Deaf.Load() {
 			continue
 		}
 		out := make([]byte, numSamples*2)

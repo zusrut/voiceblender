@@ -25,6 +25,7 @@ func toLegView(l leg.Leg) LegView {
 		State:      l.State(),
 		RoomID:     l.RoomID(),
 		Muted:      l.IsMuted(),
+		Deaf:       l.IsDeaf(),
 		Held:       l.IsHeld(),
 		SIPHeaders: l.SIPHeaders(),
 	}
@@ -224,6 +225,46 @@ func (s *Server) unmuteLeg(w http.ResponseWriter, r *http.Request) {
 
 	s.Bus.Publish(events.LegUnmuted, &events.LegUnmutedData{LegScope: events.LegScope{LegID: id}})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unmuted"})
+}
+
+func (s *Server) deafLeg(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	l, ok := s.LegMgr.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "leg not found")
+		return
+	}
+
+	l.SetDeaf(true)
+
+	if roomID := l.RoomID(); roomID != "" {
+		if rm, ok := s.RoomMgr.Get(roomID); ok {
+			rm.Mixer().SetParticipantDeaf(id, true)
+		}
+	}
+
+	s.Bus.Publish(events.LegDeaf, &events.LegDeafData{LegScope: events.LegScope{LegID: id}})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deaf"})
+}
+
+func (s *Server) undeafLeg(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	l, ok := s.LegMgr.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "leg not found")
+		return
+	}
+
+	l.SetDeaf(false)
+
+	if roomID := l.RoomID(); roomID != "" {
+		if rm, ok := s.RoomMgr.Get(roomID); ok {
+			rm.Mixer().SetParticipantDeaf(id, false)
+		}
+	}
+
+	s.Bus.Publish(events.LegUndeaf, &events.LegUndeafData{LegScope: events.LegScope{LegID: id}})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "undeaf"})
 }
 
 func (s *Server) holdLeg(w http.ResponseWriter, r *http.Request) {
