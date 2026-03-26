@@ -78,10 +78,22 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 	legPlayers.m[id][playbackID] = player
 	legPlayers.Unlock()
 
+	// If the leg is in a room, suspend the mixer's output to this
+	// participant while playback is active. Otherwise both the mixer and
+	// the playback write to the same outFrames channel, causing frame
+	// drops and choppy audio.
+	roomID := l.RoomID()
+
 	player.OnStart(func() {
 		s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
 	})
 	go func() {
+		if roomID != "" {
+			if rm, ok := s.RoomMgr.Get(roomID); ok {
+				rm.Mixer().SuspendParticipantOutput(id)
+				defer rm.Mixer().ResumeParticipantOutput(id)
+			}
+		}
 		var err error
 		if req.Tone != "" {
 			spec, ok := playback.LookupTone(req.Tone)

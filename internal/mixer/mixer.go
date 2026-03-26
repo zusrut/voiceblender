@@ -62,6 +62,11 @@ type Participant struct {
 	// and suppresses speaking events. Lock-free via atomic.
 	Muted atomic.Bool
 
+	// outputSuspended prevents the mixer from sending mixed-minus-self
+	// frames to this participant. Used during direct leg playback to avoid
+	// competing with the playback writer for the leg's outFrames channel.
+	outputSuspended atomic.Bool
+
 	// Speaking detection state (accessed only under Mixer.mu).
 	speakState speakingState
 
@@ -174,6 +179,28 @@ func (m *Mixer) SetParticipantMuted(id string, muted bool) {
 
 	if forceStopped && cb != nil {
 		cb(SpeakingEvent{ParticipantID: id, Speaking: false})
+	}
+}
+
+// SuspendParticipantOutput stops the mixer from sending mixed-minus-self
+// frames to this participant. The participant still contributes audio to the
+// mix. Used during direct leg playback to prevent the mixer and playback
+// from competing for the same output channel.
+func (m *Mixer) SuspendParticipantOutput(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.participants[id]; ok {
+		p.outputSuspended.Store(true)
+	}
+}
+
+// ResumeParticipantOutput re-enables mixed-minus-self output for this
+// participant after a SuspendParticipantOutput call.
+func (m *Mixer) ResumeParticipantOutput(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.participants[id]; ok {
+		p.outputSuspended.Store(false)
 	}
 }
 
@@ -442,6 +469,10 @@ func (m *Mixer) mixTick() {
 	// The dedicated writeLoop goroutine handles the actual IO.
 	for i, p := range parts {
 		if p.WriteOnly || p.Writer == nil {
+			continue
+		}
+		// Skip output when suspended (e.g. during direct leg playback).
+		if p.outputSuspended.Load() {
 			continue
 		}
 		out := make([]byte, numSamples*2)
