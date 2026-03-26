@@ -498,11 +498,10 @@ func (l *SIPLeg) readLoop() {
 			if len(head) > 8 {
 				head = head[:8]
 			}
-			l.log.Warn("readLoop: decode error", "error", err,
+			l.log.Debug("readLoop: decode error", "error", err,
 				"pt", pkt.PayloadType, "expected_pt", l.rtpPT,
 				"payload_len", len(pkt.Payload), "payload_head", fmt.Sprintf("%x", head),
-				"seq", pkt.SequenceNumber, "ts", pkt.Timestamp,
-				"marker", pkt.Marker, "ssrc", pkt.SSRC)
+				"seq", pkt.SequenceNumber)
 			continue
 		}
 
