@@ -66,7 +66,7 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playbackID := "pb-" + uuid.New().String()[:8]
+	ttsID := "tts-" + uuid.New().String()[:8]
 	player := playback.NewPlayer(s.Log)
 	player.SetVolume(req.Volume)
 
@@ -74,7 +74,7 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 	if legPlayers.m[id] == nil {
 		legPlayers.m[id] = make(map[string]*playback.Player)
 	}
-	legPlayers.m[id][playbackID] = player
+	legPlayers.m[id][ttsID] = player
 	legPlayers.Unlock()
 
 	go func() {
@@ -87,37 +87,37 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			legPlayers.Lock()
-			delete(legPlayers.m[id], playbackID)
+			delete(legPlayers.m[id], ttsID)
 			if len(legPlayers.m[id]) == 0 {
 				delete(legPlayers.m, id)
 			}
 			legPlayers.Unlock()
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"leg_id": id, "playback_id": playbackID, "error": err.Error()})
+			s.Bus.Publish(events.TTSError, map[string]interface{}{"leg_id": id, "tts_id": ttsID, "error": err.Error()})
 			return
 		}
 		defer result.Audio.Close()
 
 		player.OnStart(func() {
-			s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.TTSStarted, map[string]interface{}{"leg_id": id, "tts_id": ttsID})
 		})
 
 		playErr := player.PlayReaderAtRate(l.Context(), writer, result.Audio, result.MimeType, uint32(l.SampleRate()))
 
 		legPlayers.Lock()
-		delete(legPlayers.m[id], playbackID)
+		delete(legPlayers.m[id], ttsID)
 		if len(legPlayers.m[id]) == 0 {
 			delete(legPlayers.m, id)
 		}
 		legPlayers.Unlock()
 
 		if playErr != nil && playErr != context.Canceled {
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"leg_id": id, "playback_id": playbackID, "error": playErr.Error()})
+			s.Bus.Publish(events.TTSError, map[string]interface{}{"leg_id": id, "tts_id": ttsID, "error": playErr.Error()})
 		} else {
-			s.Bus.Publish(events.PlaybackFinished, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.TTSFinished, map[string]interface{}{"leg_id": id, "tts_id": ttsID})
 		}
 	}()
 
-	writeJSON(w, http.StatusOK, map[string]string{"playback_id": playbackID, "status": "playing"})
+	writeJSON(w, http.StatusOK, map[string]string{"tts_id": ttsID, "status": "playing"})
 }
 
 func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
@@ -163,10 +163,10 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playbackID := "pb-" + uuid.New().String()[:8]
+	ttsID := "tts-" + uuid.New().String()[:8]
 
 	pr, pw := io.Pipe()
-	rm.Mixer().AddPlaybackSource(playbackID, pr)
+	rm.Mixer().AddPlaybackSource(ttsID, pr)
 
 	player := playback.NewPlayer(s.Log)
 	player.SetVolume(req.Volume)
@@ -175,7 +175,7 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 	if roomPlayers.m[id] == nil {
 		roomPlayers.m[id] = make(map[string]*playback.Player)
 	}
-	roomPlayers.m[id][playbackID] = player
+	roomPlayers.m[id][ttsID] = player
 	roomPlayers.Unlock()
 
 	go func() {
@@ -186,28 +186,28 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			pw.Close()
-			rm.Mixer().RemoveParticipant(playbackID)
+			rm.Mixer().RemoveParticipant(ttsID)
 			roomPlayers.Lock()
-			delete(roomPlayers.m[id], playbackID)
+			delete(roomPlayers.m[id], ttsID)
 			if len(roomPlayers.m[id]) == 0 {
 				delete(roomPlayers.m, id)
 			}
 			roomPlayers.Unlock()
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"room_id": id, "playback_id": playbackID, "error": err.Error()})
+			s.Bus.Publish(events.TTSError, map[string]interface{}{"room_id": id, "tts_id": ttsID, "error": err.Error()})
 			return
 		}
 		defer result.Audio.Close()
 
 		player.OnStart(func() {
-			s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"room_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.TTSStarted, map[string]interface{}{"room_id": id, "tts_id": ttsID})
 		})
 
 		playErr := player.PlayReader(parts[0].Context(), pw, result.Audio, result.MimeType)
 		pw.Close()
-		rm.Mixer().RemoveParticipant(playbackID)
+		rm.Mixer().RemoveParticipant(ttsID)
 
 		roomPlayers.Lock()
-		delete(roomPlayers.m[id], playbackID)
+		delete(roomPlayers.m[id], ttsID)
 		if len(roomPlayers.m[id]) == 0 {
 			delete(roomPlayers.m, id)
 		}
@@ -215,13 +215,13 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 
 		if playErr != nil && playErr != context.Canceled {
 			s.Log.Debug("room TTS playback error", "room_id", id, "error", playErr)
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"room_id": id, "playback_id": playbackID, "error": playErr.Error()})
+			s.Bus.Publish(events.TTSError, map[string]interface{}{"room_id": id, "tts_id": ttsID, "error": playErr.Error()})
 		} else {
-			s.Bus.Publish(events.PlaybackFinished, map[string]interface{}{"room_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.TTSFinished, map[string]interface{}{"room_id": id, "tts_id": ttsID})
 		}
 	}()
 
-	writeJSON(w, http.StatusOK, map[string]string{"playback_id": playbackID, "status": "playing"})
+	writeJSON(w, http.StatusOK, map[string]string{"tts_id": ttsID, "status": "playing"})
 }
 
 // resolveTTSProvider returns the TTS provider and API key for the request.

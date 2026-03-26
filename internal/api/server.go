@@ -39,6 +39,7 @@ func NewServer(
 	cfg config.Config,
 	log *slog.Logger,
 ) *Server {
+	instanceID = cfg.InstanceID
 	s := &Server{
 		Router:    chi.NewRouter(),
 		LegMgr:   legMgr,

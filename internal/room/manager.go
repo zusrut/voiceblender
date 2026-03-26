@@ -113,6 +113,53 @@ func (m *Manager) AddLeg(roomID, legID string) error {
 	return nil
 }
 
+func (m *Manager) MoveLeg(fromRoomID, toRoomID, legID string) error {
+	fromRoom, ok := m.Get(fromRoomID)
+	if !ok {
+		return fmt.Errorf("room %s not found", fromRoomID)
+	}
+
+	// Get or create target room.
+	m.mu.Lock()
+	toRoom, ok := m.rooms[toRoomID]
+	if !ok {
+		toRoom = NewRoom(toRoomID, m.bus, m.log)
+		m.rooms[toRoomID] = toRoom
+		m.bus.Publish(events.RoomCreated, map[string]interface{}{"room_id": toRoomID})
+	}
+	m.mu.Unlock()
+
+	l, ok := fromRoom.DetachLeg(legID)
+	if !ok {
+		return fmt.Errorf("leg %s not found in room %s", legID, fromRoomID)
+	}
+	toRoom.AddLeg(l)
+
+	m.bus.Publish(events.LegLeftRoom, map[string]interface{}{
+		"leg_id":  legID,
+		"room_id": fromRoomID,
+	})
+	m.bus.Publish(events.LegJoinedRoom, map[string]interface{}{
+		"leg_id":  legID,
+		"room_id": toRoomID,
+	})
+	return nil
+}
+
+// FindLegRoom returns the room ID that contains the given leg, if any.
+func (m *Manager) FindLegRoom(legID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, r := range m.rooms {
+		for _, p := range r.Participants() {
+			if p.ID() == legID {
+				return r.ID, true
+			}
+		}
+	}
+	return "", false
+}
+
 func (m *Manager) RemoveLeg(roomID, legID string) error {
 	r, ok := m.Get(roomID)
 	if !ok {

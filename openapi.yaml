@@ -567,7 +567,12 @@ paths:
       - $ref: '#/components/parameters/RoomId'
     post:
       operationId: addLegToRoom
-      summary: Add a leg to a room (auto-creates room if it doesn't exist)
+      summary: Add or move a leg to a room
+      description: >
+        Add a leg to a room (auto-creates room if it doesn't exist).
+        If the leg is already in a different room, it is atomically moved
+        to the target room. A ringing inbound SIP leg is automatically
+        answered before being added.
       tags: [Rooms]
       requestBody:
         required: true

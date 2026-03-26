@@ -22,6 +22,10 @@ const (
 	PlaybackFinished EventType = "playback.finished"
 	PlaybackError    EventType = "playback.error"
 
+	TTSStarted  EventType = "tts.started"
+	TTSFinished EventType = "tts.finished"
+	TTSError    EventType = "tts.error"
+
 	RecordingStarted  EventType = "recording.started"
 	RecordingFinished EventType = "recording.finished"
 
@@ -40,7 +44,8 @@ const (
 )
 
 type Event struct {
-	Type      EventType              `json:"type"`
-	Timestamp time.Time              `json:"timestamp"`
-	Data      map[string]interface{} `json:"data"`
+	Type       EventType              `json:"type"`
+	Timestamp  time.Time              `json:"timestamp"`
+	InstanceID string                 `json:"instance_id,omitempty"`
+	Data       map[string]interface{} `json:"data"`
 }

@@ -3,9 +3,12 @@ package config
 import (
 	"os"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Config struct {
+	InstanceID   string
 	SIPBindIP    string
 	SIPListenIP  string
 	SIPPort      string
@@ -25,6 +28,7 @@ type Config struct {
 
 func Load() Config {
 	return Config{
+		InstanceID:   envOr("INSTANCE_ID", uuid.New().String()),
 		SIPBindIP:    envOr("SIP_BIND_IP", "127.0.0.1"),
 		SIPListenIP:  os.Getenv("SIP_LISTEN_IP"), // empty = same as SIP_BIND_IP
 		SIPPort:      envOr("SIP_PORT", "5060"),

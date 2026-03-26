@@ -85,12 +85,34 @@ func (s *Server) addLegToRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Auto-answer ringing inbound SIP legs before adding to the room.
+
 	l, ok := s.LegMgr.Get(req.LegID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("leg %s not found", req.LegID))
 		return
 	}
+
+	// If the leg is already in a room, move it instead of adding.
+	if fromRoomID, inRoom := s.RoomMgr.FindLegRoom(req.LegID); inRoom {
+		if fromRoomID == roomID {
+			writeError(w, http.StatusBadRequest, "leg already in this room")
+			return
+		}
+		if err := s.RoomMgr.MoveLeg(fromRoomID, roomID, req.LegID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.onLegJoinedRoom(roomID, req.LegID)
+		s.stopRoomAgentIfEmpty(fromRoomID)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status": "moved",
+			"from":   fromRoomID,
+			"to":     roomID,
+		})
+		return
+	}
+
+	// Auto-answer ringing inbound SIP legs before adding to the room.
 	if sipLeg, ok := l.(*leg.SIPLeg); ok && l.State() == leg.StateRinging && l.Type() == leg.TypeSIPInbound {
 		sipLeg.SignalAnswer()
 		if err := sipLeg.WaitConnected(r.Context()); err != nil {

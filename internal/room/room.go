@@ -71,6 +71,25 @@ func (r *Room) AddLeg(l leg.Leg) {
 	}
 }
 
+// DetachLeg removes a leg from the room and returns it.
+func (r *Room) DetachLeg(legID string) (leg.Leg, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	l, ok := r.participants[legID]
+	if !ok {
+		return nil, false
+	}
+	l.SetRoomID("")
+	delete(r.participants, legID)
+	r.mix.RemoveParticipant(legID)
+
+	if len(r.participants) == 0 {
+		r.mix.Stop()
+	}
+	return l, true
+}
+
 func (r *Room) RemoveLeg(legID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

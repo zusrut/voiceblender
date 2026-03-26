@@ -364,8 +364,10 @@ Synthesize speech and play it on a leg.
 **Response:** `200 OK`
 
 ```json
-{ "playback_id": "pb-a1b2c3d4", "status": "playing" }
+{ "tts_id": "tts-a1b2c3d4", "status": "playing" }
 ```
+
+Events `tts.started` and `tts.finished` are emitted.
 
 **Errors:**
 - `400` — Invalid JSON, missing text/voice, volume out of range
@@ -632,7 +634,9 @@ Delete a room. All participants are hung up.
 
 ### POST /v1/rooms/{id}/legs
 
-Add a leg to a room. The leg must be in `connected` or `early_media` state. If the leg is a ringing inbound SIP leg, it is automatically answered before being added. If the room does not exist, it is automatically created.
+Add a leg to a room, or move it from another room. The leg must be in `connected` or `early_media` state. If the leg is a ringing inbound SIP leg, it is automatically answered before being added. If the room does not exist, it is automatically created.
+
+If the leg is already in a different room, it is atomically moved — detached from the source mixer and immediately added to the target mixer with minimal audio gap. If the target room does not exist, it is auto-created.
 
 **Request:**
 
@@ -640,13 +644,22 @@ Add a leg to a room. The leg must be in `connected` or `early_media` state. If t
 { "leg_id": "550e8400-e29b-41d4-a716-446655440000" }
 ```
 
-**Response:** `200 OK`
+**Response (added):** `200 OK`
 
 ```json
 { "status": "added" }
 ```
 
-**Errors:** `400` — Invalid JSON, leg not found, or leg not connected
+**Response (moved from another room):** `200 OK`
+
+```json
+{ "status": "moved", "from": "room-123", "to": "room-456" }
+```
+
+Events `leg.left_room` and `leg.joined_room` are emitted on move.
+
+**Errors:**
+- `400` — Invalid JSON, leg not found, leg not connected, or leg already in this room
 
 ---
 
@@ -750,8 +763,10 @@ Synthesize speech and play it into a room.
 **Response:** `200 OK`
 
 ```json
-{ "playback_id": "pb-a1b2c3d4", "status": "playing" }
+{ "tts_id": "tts-a1b2c3d4", "status": "playing" }
 ```
+
+Events `tts.started` and `tts.finished` are emitted.
 
 **Errors:**
 - `400` — Invalid JSON, missing text/voice, volume out of range
@@ -1160,9 +1175,12 @@ The signature is computed over the raw JSON request body using HMAC-SHA256 with 
 {
   "type": "leg.ringing",
   "timestamp": "2026-03-01T11:05:00.123Z",
+  "instance_id": "550e8400-e29b-41d4-a716-446655440000",
   "data": { ... }
 }
 ```
+
+All API responses include `instance_id` as the first field in the JSON body.
 
 ### Event Types
 
@@ -1187,6 +1205,9 @@ The signature is computed over the raw JSON request body using HMAC-SHA256 with 
 | `playback.started` | Playback began | `leg_id` or `room_id`, `playback_id` |
 | `playback.finished` | Playback ended | `leg_id` or `room_id`, `playback_id` |
 | `playback.error` | Playback failed | `leg_id` or `room_id`, `playback_id`, `error` |
+| `tts.started` | TTS synthesis began playing | `leg_id` or `room_id`, `tts_id` |
+| `tts.finished` | TTS synthesis finished playing | `leg_id` or `room_id`, `tts_id` |
+| `tts.error` | TTS synthesis or playback failed | `leg_id` or `room_id`, `tts_id`, `error` |
 | `recording.started` | Recording began | `leg_id` or `room_id`, `file` |
 | `recording.finished` | Recording ended | `leg_id` or `room_id`, `file` |
 | `stt.text` | Speech-to-text transcript | `leg_id`, `room_id` (if room STT), `text`, `is_final` |
@@ -1247,6 +1268,7 @@ All errors return:
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
+| `INSTANCE_ID` | _(auto-generated UUID)_ | Instance identifier, included in all API response bodies and webhook events |
 | `HTTP_ADDR` | `:8080` | REST API listen address |
 | `SIP_BIND_IP` | `127.0.0.1` | IP advertised in SDP/Contact/Via headers (auto-detected if `0.0.0.0`) |
 | `SIP_LISTEN_IP` | _(same as SIP_BIND_IP)_ | IP to bind the UDP socket on |

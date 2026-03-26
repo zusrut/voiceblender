@@ -71,7 +71,7 @@ func newTestInstance(t *testing.T, name string) *testInstance {
 		RecordingDir: recDir,
 	}
 
-	bus := events.NewBus()
+	bus := events.NewBus("test")
 	webhooks := events.NewWebhookRegistry(bus, log)
 	legMgr := leg.NewManager()
 	roomMgr := room.NewManager(legMgr, bus, log)
@@ -661,6 +661,102 @@ func TestOutboundInbound_RoomBridge(t *testing.T) {
 	// Cleanup: hangup.
 	delResp := httpDelete(t, fmt.Sprintf("%s/v1/legs/%s", instA.baseURL(), outboundLeg.ID))
 	delResp.Body.Close()
+}
+
+func TestRoom_MoveLegViaPost(t *testing.T) {
+	instA := newTestInstance(t, "instance-a")
+	instB := newTestInstance(t, "instance-b")
+	outboundID, _ := establishCall(t, instA, instB)
+
+	// Create room-1 and add the outbound leg.
+	roomResp1 := httpPost(t, instA.baseURL()+"/v1/rooms", map[string]interface{}{"id": "room-move-1"})
+	if roomResp1.StatusCode != http.StatusCreated {
+		t.Fatalf("create room-1: unexpected status %d", roomResp1.StatusCode)
+	}
+	roomResp1.Body.Close()
+
+	addResp := httpPost(t, fmt.Sprintf("%s/v1/rooms/room-move-1/legs", instA.baseURL()), map[string]interface{}{
+		"leg_id": outboundID,
+	})
+	if addResp.StatusCode != http.StatusOK {
+		t.Fatalf("add leg to room-1: unexpected status %d", addResp.StatusCode)
+	}
+	var addResult map[string]string
+	decodeJSON(t, addResp, &addResult)
+	if addResult["status"] != "added" {
+		t.Fatalf("expected status 'added', got %q", addResult["status"])
+	}
+
+	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-1"
+	}, 3*time.Second)
+
+	// Create room-2.
+	roomResp2 := httpPost(t, instA.baseURL()+"/v1/rooms", map[string]interface{}{"id": "room-move-2"})
+	if roomResp2.StatusCode != http.StatusCreated {
+		t.Fatalf("create room-2: unexpected status %d", roomResp2.StatusCode)
+	}
+	roomResp2.Body.Close()
+
+	// Move leg from room-1 to room-2 via POST /v1/rooms/room-move-2/legs.
+	moveResp := httpPost(t, fmt.Sprintf("%s/v1/rooms/room-move-2/legs", instA.baseURL()), map[string]interface{}{
+		"leg_id": outboundID,
+	})
+	if moveResp.StatusCode != http.StatusOK {
+		t.Fatalf("move leg to room-2: unexpected status %d", moveResp.StatusCode)
+	}
+	var moveResult map[string]string
+	decodeJSON(t, moveResp, &moveResult)
+	if moveResult["status"] != "moved" {
+		t.Fatalf("expected status 'moved', got %q", moveResult["status"])
+	}
+	if moveResult["from"] != "room-move-1" {
+		t.Fatalf("expected from 'room-move-1', got %q", moveResult["from"])
+	}
+	if moveResult["to"] != "room-move-2" {
+		t.Fatalf("expected to 'room-move-2', got %q", moveResult["to"])
+	}
+
+	// Verify leg.left_room event from room-1.
+	instA.collector.waitForMatch(t, events.LegLeftRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-1"
+	}, 3*time.Second)
+
+	// Verify leg.joined_room event for room-2.
+	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-2"
+	}, 3*time.Second)
+
+	// Verify room-2 now has the participant.
+	getRoomResp := httpGet(t, fmt.Sprintf("%s/v1/rooms/room-move-2", instA.baseURL()))
+	var gotRoom roomView
+	decodeJSON(t, getRoomResp, &gotRoom)
+	if len(gotRoom.Participants) != 1 {
+		t.Fatalf("expected 1 participant in room-2, got %d", len(gotRoom.Participants))
+	}
+	if gotRoom.Participants[0].ID != outboundID {
+		t.Fatalf("expected participant %s, got %s", outboundID, gotRoom.Participants[0].ID)
+	}
+
+	// Verify room-1 is now empty.
+	getRoom1Resp := httpGet(t, fmt.Sprintf("%s/v1/rooms/room-move-1", instA.baseURL()))
+	var gotRoom1 roomView
+	decodeJSON(t, getRoom1Resp, &gotRoom1)
+	if len(gotRoom1.Participants) != 0 {
+		t.Fatalf("expected 0 participants in room-1, got %d", len(gotRoom1.Participants))
+	}
+
+	// Verify adding leg to the same room returns 400.
+	dupResp := httpPost(t, fmt.Sprintf("%s/v1/rooms/room-move-2/legs", instA.baseURL()), map[string]interface{}{
+		"leg_id": outboundID,
+	})
+	if dupResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for duplicate add, got %d", dupResp.StatusCode)
+	}
+	dupResp.Body.Close()
+
+	// Cleanup.
+	httpDelete(t, fmt.Sprintf("%s/v1/legs/%s", instA.baseURL(), outboundID))
 }
 
 func TestOutboundInbound_RingTimeout(t *testing.T) {

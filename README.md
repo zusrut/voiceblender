@@ -37,6 +37,7 @@ All configuration is via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `INSTANCE_ID` | *(auto-generated UUID)* | Instance identifier, included in API responses and webhooks |
 | `HTTP_ADDR` | `:8080` | REST API listen address |
 | `SIP_BIND_IP` | `127.0.0.1` | IP for SDP/Contact/Via headers |
 | `SIP_LISTEN_IP` | *(same as SIP_BIND_IP)* | UDP socket bind IP |
@@ -89,8 +90,8 @@ POST   /v1/rooms                   # Create room
 GET    /v1/rooms                   # List rooms
 GET    /v1/rooms/{id}              # Get room
 DELETE /v1/rooms/{id}              # Delete room (hangs up all legs)
-POST   /v1/rooms/{id}/legs         # Add leg to room
-DELETE /v1/rooms/{id}/legs/{legID} # Remove leg from room
+POST   /v1/rooms/{id}/legs         # Add or move leg to room
+DELETE /v1/rooms/{id}/legs/{legID}      # Remove leg from room
 GET    /v1/rooms/{id}/ws           # Join room via WebSocket
 POST   /v1/rooms/{id}/play         # Play audio or tone to room
 DELETE /v1/rooms/{id}/play/{pbID}  # Stop room playback

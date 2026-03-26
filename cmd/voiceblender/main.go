@@ -41,7 +41,7 @@ func main() {
 	defer stop()
 
 	// Event bus + webhooks
-	bus := events.NewBus()
+	bus := events.NewBus(cfg.InstanceID)
 	bus.Subscribe(func(e events.Event) {
 		log.Info("event", "type", string(e.Type), "data", e.Data)
 	})
@@ -113,6 +113,8 @@ func main() {
 
 	// Run SIP and HTTP servers
 	g, gCtx := errgroup.WithContext(ctx)
+
+	log.Info("instance", "id", cfg.InstanceID)
 
 	// SIP server
 	g.Go(func() error {

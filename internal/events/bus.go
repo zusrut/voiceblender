@@ -8,12 +8,13 @@ import (
 type Handler func(Event)
 
 type Bus struct {
-	mu       sync.RWMutex
-	handlers []Handler
+	mu         sync.RWMutex
+	handlers   []Handler
+	instanceID string
 }
 
-func NewBus() *Bus {
-	return &Bus{}
+func NewBus(instanceID string) *Bus {
+	return &Bus{instanceID: instanceID}
 }
 
 func (b *Bus) Subscribe(h Handler) {
@@ -24,9 +25,10 @@ func (b *Bus) Subscribe(h Handler) {
 
 func (b *Bus) Publish(typ EventType, data map[string]interface{}) {
 	e := Event{
-		Type:      typ,
-		Timestamp: time.Now().UTC(),
-		Data:      data,
+		Type:       typ,
+		Timestamp:  time.Now().UTC(),
+		InstanceID: b.instanceID,
+		Data:       data,
 	}
 	b.mu.RLock()
 	handlers := make([]Handler, len(b.handlers))
