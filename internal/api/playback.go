@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,8 +10,10 @@ import (
 	"sync"
 
 	"github.com/csiwek/VoiceBlender/internal/events"
+	"github.com/csiwek/VoiceBlender/internal/leg"
 	"github.com/csiwek/VoiceBlender/internal/mixer"
 	"github.com/csiwek/VoiceBlender/internal/playback"
+	"github.com/csiwek/VoiceBlender/internal/room"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -65,25 +68,22 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 	player := playback.NewPlayer(s.Log)
 	player.SetVolume(req.Volume)
 
-	// If the leg is in a room, write playback into the mixer's per-participant
-	// inject channel (at 16kHz mixer rate) so it's mixed with room audio.
-	// Otherwise write directly to the leg's AudioWriter at its native rate.
-	var writer io.Writer
-	var playRate uint32
-	roomID := l.RoomID()
-	if roomID != "" {
-		if rm, ok := s.RoomMgr.Get(roomID); ok {
-			writer = rm.Mixer().InjectWriter(id)
-			playRate = uint32(mixer.SampleRate) // mixer native rate
-		}
-	}
-	if writer == nil {
-		writer = l.AudioWriter()
-		playRate = uint32(l.SampleRate())
-	}
-	if writer == nil {
+	directWriter := l.AudioWriter()
+	if directWriter == nil {
 		writeError(w, http.StatusConflict, "leg has no audio writer")
 		return
+	}
+
+	// Use a dynamic writer that checks per-frame whether the leg is in a
+	// room. When in a room, frames are injected into the mixer (mixed with
+	// room audio). When not in a room, frames go directly to the leg.
+	// Playback always runs at the mixer's 16kHz rate; the dynamic writer
+	// resamples to the leg's native rate when writing directly.
+	writer := &legPlaybackWriter{
+		legID:        id,
+		leg:          l,
+		directWriter: directWriter,
+		roomMgr:      s.RoomMgr,
 	}
 
 	legPlayers.Lock()
@@ -92,6 +92,8 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 	}
 	legPlayers.m[id][playbackID] = player
 	legPlayers.Unlock()
+
+	playRate := uint32(mixer.SampleRate) // always play at mixer rate
 
 	player.OnStart(func() {
 		s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
@@ -261,4 +263,61 @@ func (s *Server) stopPlayRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Stop()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// legPlaybackWriter routes playback PCM frames dynamically based on
+// whether the leg is currently in a room. Frames arrive at 16kHz (mixer
+// rate).
+//
+//   - In a room: writes to the mixer's per-participant inject channel so
+//     the playback audio is mixed with room audio.
+//   - Not in a room: resamples to the leg's native rate and writes
+//     directly to the leg's AudioWriter.
+type legPlaybackWriter struct {
+	legID        string
+	leg          leg.Leg
+	directWriter io.Writer   // leg.AudioWriter(), captured once
+	roomMgr      *room.Manager
+}
+
+func (w *legPlaybackWriter) Write(p []byte) (int, error) {
+	roomID := w.leg.RoomID()
+	if roomID != "" {
+		if rm, ok := w.roomMgr.Get(roomID); ok {
+			injW := rm.Mixer().InjectWriter(w.legID)
+			if injW != nil {
+				return injW.Write(p)
+			}
+		}
+	}
+	// Not in a room — resample from 16kHz to leg's native rate and write.
+	legRate := uint32(w.leg.SampleRate())
+	mixRate := uint32(mixer.SampleRate)
+	if legRate == mixRate {
+		return w.directWriter.Write(p)
+	}
+	// Resample: decode 16-bit LE samples, linear interpolation, re-encode.
+	srcSamples := len(p) / 2
+	src := make([]int16, srcSamples)
+	for i := 0; i < srcSamples; i++ {
+		src[i] = int16(binary.LittleEndian.Uint16(p[i*2:]))
+	}
+	ratio := float64(mixRate) / float64(legRate)
+	outLen := int(float64(srcSamples) / ratio)
+	out := make([]byte, outLen*2)
+	for i := 0; i < outLen; i++ {
+		srcPos := float64(i) * ratio
+		idx := int(srcPos)
+		frac := srcPos - float64(idx)
+		var s int16
+		if idx+1 < srcSamples {
+			s0 := int32(src[idx])
+			s1 := int32(src[idx+1])
+			s = int16(s0 + int32(float64(s1-s0)*frac))
+		} else if idx < srcSamples {
+			s = src[idx]
+		}
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(s))
+	}
+	return w.directWriter.Write(out)
 }
