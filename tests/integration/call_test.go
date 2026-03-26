@@ -72,7 +72,7 @@ func newTestInstance(t *testing.T, name string) *testInstance {
 	}
 
 	bus := events.NewBus("test")
-	webhooks := events.NewWebhookRegistry(bus, log)
+	webhooks := events.NewWebhookRegistry(bus, log, "", "")
 	legMgr := leg.NewManager()
 	roomMgr := room.NewManager(legMgr, bus, log)
 
@@ -439,10 +439,10 @@ func TestOutboundInbound_Connect(t *testing.T) {
 
 	// Verify disconnected events on both sides.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 5*time.Second)
 	instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundLeg.ID
+		return e.Data.GetLegID() == inboundLeg.ID
 	}, 5*time.Second)
 }
 
@@ -463,21 +463,16 @@ func TestDisconnect_DurationFields(t *testing.T) {
 
 	// Verify outbound disconnect event has duration fields.
 	eA := instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 5*time.Second)
 
-	dTotal, ok := eA.Data["duration_total"].(float64)
-	if !ok {
-		t.Fatalf("duration_total missing or not float64: %v", eA.Data["duration_total"])
-	}
+	dA := eA.Data.(*events.LegDisconnectedData)
+	dTotal := dA.Timing.DurationTotal
 	if dTotal < 0.1 {
 		t.Fatalf("expected duration_total >= 0.1s, got %f", dTotal)
 	}
 
-	dAnswered, ok := eA.Data["duration_answered"].(float64)
-	if !ok {
-		t.Fatalf("duration_answered missing or not float64: %v", eA.Data["duration_answered"])
-	}
+	dAnswered := dA.Timing.DurationAnswered
 	if dAnswered < 0.1 {
 		t.Fatalf("expected duration_answered >= 0.1s, got %f", dAnswered)
 	}
@@ -489,21 +484,16 @@ func TestDisconnect_DurationFields(t *testing.T) {
 
 	// Verify inbound disconnect event on B also has duration fields.
 	eB := instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundID
+		return e.Data.GetLegID() == inboundID
 	}, 5*time.Second)
 
-	dTotalB, ok := eB.Data["duration_total"].(float64)
-	if !ok {
-		t.Fatalf("B: duration_total missing or not float64: %v", eB.Data["duration_total"])
-	}
+	dB := eB.Data.(*events.LegDisconnectedData)
+	dTotalB := dB.Timing.DurationTotal
 	if dTotalB < 0.1 {
 		t.Fatalf("B: expected duration_total >= 0.1s, got %f", dTotalB)
 	}
 
-	dAnsweredB, ok := eB.Data["duration_answered"].(float64)
-	if !ok {
-		t.Fatalf("B: duration_answered missing or not float64: %v", eB.Data["duration_answered"])
-	}
+	dAnsweredB := dB.Timing.DurationAnswered
 	if dAnsweredB < 0.1 {
 		t.Fatalf("B: expected duration_answered >= 0.1s, got %f", dAnsweredB)
 	}
@@ -530,23 +520,18 @@ func TestDisconnect_UnansweredDuration(t *testing.T) {
 
 	// Don't answer. Wait for disconnect.
 	e := instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 5*time.Second)
 
 	// duration_total should be > 0 (at least the ring timeout).
-	dTotal, ok := e.Data["duration_total"].(float64)
-	if !ok {
-		t.Fatalf("duration_total missing or not float64: %v", e.Data["duration_total"])
-	}
+	d := e.Data.(*events.LegDisconnectedData)
+	dTotal := d.Timing.DurationTotal
 	if dTotal < 0.5 {
 		t.Fatalf("expected duration_total >= 0.5s, got %f", dTotal)
 	}
 
 	// duration_answered should be 0 (never answered).
-	dAnswered, ok := e.Data["duration_answered"].(float64)
-	if !ok {
-		t.Fatalf("duration_answered missing or not float64: %v", e.Data["duration_answered"])
-	}
+	dAnswered := d.Timing.DurationAnswered
 	if dAnswered != 0 {
 		t.Fatalf("expected duration_answered == 0, got %f", dAnswered)
 	}
@@ -582,7 +567,7 @@ func TestOutboundInbound_CallerCancel(t *testing.T) {
 
 	// Verify B sees leg.disconnected with reason "caller_cancel".
 	instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundLeg.ID && e.Data["reason"] == "caller_cancel"
+		return e.Data.GetLegID() == inboundLeg.ID && e.Data.(*events.LegDisconnectedData).Disposition.Reason == "caller_cancel"
 	}, 5*time.Second)
 }
 
@@ -632,7 +617,7 @@ func TestOutboundInbound_RoomBridge(t *testing.T) {
 
 	// Verify leg.joined_room event.
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// Verify GET /v1/rooms/{id} shows the participant.
@@ -655,7 +640,7 @@ func TestOutboundInbound_RoomBridge(t *testing.T) {
 
 	// Verify leg.left_room event.
 	instA.collector.waitForMatch(t, events.LegLeftRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// Cleanup: hangup.
@@ -688,7 +673,7 @@ func TestRoom_MoveLegViaPost(t *testing.T) {
 	}
 
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-1"
+		return e.Data.GetLegID() == outboundID && e.Data.GetRoomID() == "room-move-1"
 	}, 3*time.Second)
 
 	// Create room-2.
@@ -719,12 +704,12 @@ func TestRoom_MoveLegViaPost(t *testing.T) {
 
 	// Verify leg.left_room event from room-1.
 	instA.collector.waitForMatch(t, events.LegLeftRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-1"
+		return e.Data.GetLegID() == outboundID && e.Data.GetRoomID() == "room-move-1"
 	}, 3*time.Second)
 
 	// Verify leg.joined_room event for room-2.
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID && e.Data["room_id"] == "room-move-2"
+		return e.Data.GetLegID() == outboundID && e.Data.GetRoomID() == "room-move-2"
 	}, 3*time.Second)
 
 	// Verify room-2 now has the participant.
@@ -778,7 +763,7 @@ func TestOutboundInbound_RingTimeout(t *testing.T) {
 
 	// Do NOT answer on B. Wait for A to see leg.disconnected.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 5*time.Second)
 }
 
@@ -810,7 +795,7 @@ func TestRecording_StandaloneSIPLeg(t *testing.T) {
 
 	// Verify recording.started event.
 	instA.collector.waitForMatch(t, events.RecordingStarted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Let it record briefly.
@@ -832,7 +817,7 @@ func TestRecording_StandaloneSIPLeg(t *testing.T) {
 
 	// Verify recording.finished event.
 	instA.collector.waitForMatch(t, events.RecordingFinished, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify WAV contains stereo 8kHz audio with real samples.
@@ -876,7 +861,7 @@ func TestRecording_InRoomLeg(t *testing.T) {
 	}
 
 	instA.collector.waitForMatch(t, events.RecordingStarted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	time.Sleep(300 * time.Millisecond)
@@ -893,7 +878,7 @@ func TestRecording_InRoomLeg(t *testing.T) {
 	}
 
 	instA.collector.waitForMatch(t, events.RecordingFinished, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify WAV contains stereo 16kHz audio (mixer rate) with real samples.
@@ -940,7 +925,7 @@ func TestRecording_Room(t *testing.T) {
 	}
 
 	instA.collector.waitForMatch(t, events.RecordingStarted, func(e events.Event) bool {
-		return e.Data["room_id"] == rm.ID
+		return e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	time.Sleep(300 * time.Millisecond)
@@ -960,7 +945,7 @@ func TestRecording_Room(t *testing.T) {
 	}
 
 	instA.collector.waitForMatch(t, events.RecordingFinished, func(e events.Event) bool {
-		return e.Data["room_id"] == rm.ID
+		return e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// Verify WAV contains mono 16kHz audio (mixer rate) with real samples.
@@ -984,7 +969,7 @@ func TestRecording_StopsOnDisconnect(t *testing.T) {
 	decodeJSON(t, recResp, &recStart)
 
 	instA.collector.waitForMatch(t, events.RecordingStarted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	time.Sleep(200 * time.Millisecond)
@@ -998,7 +983,7 @@ func TestRecording_StopsOnDisconnect(t *testing.T) {
 
 	// Verify recording.finished event fires automatically.
 	instA.collector.waitForMatch(t, events.RecordingFinished, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 5*time.Second)
 
 	// Verify WAV contains stereo 8kHz audio with real samples.
@@ -1057,7 +1042,7 @@ func TestMute_LegInRoom(t *testing.T) {
 
 	// Verify leg.muted event.
 	instA.collector.waitForMatch(t, events.LegMuted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify GET shows muted.
@@ -1081,7 +1066,7 @@ func TestMute_LegInRoom(t *testing.T) {
 
 	// Verify leg.unmuted event.
 	instA.collector.waitForMatch(t, events.LegUnmuted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify GET shows unmuted.
@@ -1121,7 +1106,7 @@ func TestMute_SpeakingEventsSuppressed(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	if instA.collector.hasEvent(events.SpeakingStarted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}) {
 		t.Fatal("speaking.started should not fire for muted leg")
 	}
@@ -1166,7 +1151,7 @@ func TestMute_BeforeRoomJoin(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	if instA.collector.hasEvent(events.SpeakingStarted, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}) {
 		t.Fatal("speaking.started should not fire for pre-muted leg")
 	}
@@ -1200,7 +1185,7 @@ func TestHold_LocalHoldUnhold(t *testing.T) {
 
 	// Verify leg.hold event.
 	instA.collector.waitForMatch(t, events.LegHold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify GET shows held=true, state=held.
@@ -1227,7 +1212,7 @@ func TestHold_LocalHoldUnhold(t *testing.T) {
 
 	// Verify leg.unhold event.
 	instA.collector.waitForMatch(t, events.LegUnhold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify GET shows held=false, state=connected.
@@ -1354,7 +1339,7 @@ func TestHold_HangupCleansUpHoldTimer(t *testing.T) {
 
 	// Verify disconnect event fires.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 }
 
@@ -1375,12 +1360,12 @@ func TestHold_RemoteHoldViaReInvite(t *testing.T) {
 
 	// B should see leg.hold event for its inbound leg.
 	instB.collector.waitForMatch(t, events.LegHold, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundID
+		return e.Data.GetLegID() == inboundID
 	}, 3*time.Second)
 
 	// A should detect the hold via re-INVITE and see leg.hold for its outbound leg.
 	instA.collector.waitForMatch(t, events.LegHold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 5*time.Second)
 
 	// Verify A's leg shows held=true.
@@ -1400,12 +1385,12 @@ func TestHold_RemoteHoldViaReInvite(t *testing.T) {
 
 	// B should see leg.unhold event.
 	instB.collector.waitForMatch(t, events.LegUnhold, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundID
+		return e.Data.GetLegID() == inboundID
 	}, 3*time.Second)
 
 	// A should detect the unhold.
 	instA.collector.waitForMatch(t, events.LegUnhold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 5*time.Second)
 
 	// Verify A's leg is no longer held.
@@ -1445,7 +1430,7 @@ func TestHold_LegInRoom(t *testing.T) {
 	holdResp.Body.Close()
 
 	instA.collector.waitForMatch(t, events.LegHold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Verify GET shows held.
@@ -1464,7 +1449,7 @@ func TestHold_LegInRoom(t *testing.T) {
 	unholdResp.Body.Close()
 
 	instA.collector.waitForMatch(t, events.LegUnhold, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}, 3*time.Second)
 
 	// Cleanup.
@@ -1508,7 +1493,7 @@ func TestOutboundEarlyMedia_183WithSDP(t *testing.T) {
 
 	// Verify leg.early_media event on A.
 	instA.collector.waitForMatch(t, events.LegEarlyMedia, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 3*time.Second)
 
 	// Create room on A and add the early_media leg — should succeed.
@@ -1529,7 +1514,7 @@ func TestOutboundEarlyMedia_183WithSDP(t *testing.T) {
 	addResp.Body.Close()
 
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// B answers — A's outbound leg should transition from early_media to connected.
@@ -1544,7 +1529,7 @@ func TestOutboundEarlyMedia_183WithSDP(t *testing.T) {
 
 	// Verify leg.connected event on A.
 	instA.collector.waitForMatch(t, events.LegConnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 3*time.Second)
 
 	// Verify room still has the participant.
@@ -1572,7 +1557,7 @@ func TestOutboundEarlyMedia_AnswerWithoutEarlyMedia(t *testing.T) {
 
 	// Ensure no early_media event was emitted on A.
 	if instA.collector.hasEvent(events.LegEarlyMedia, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundID
+		return e.Data.GetLegID() == outboundID
 	}) {
 		t.Fatal("leg.early_media should not fire when remote answers directly")
 	}
@@ -1622,12 +1607,12 @@ func TestOutboundEarlyMedia_HangupDuringEarlyMedia(t *testing.T) {
 
 	// Verify disconnected event on A.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID
+		return e.Data.GetLegID() == outboundLeg.ID
 	}, 5*time.Second)
 
 	// Verify B also sees disconnect.
 	instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inboundLeg.ID
+		return e.Data.GetLegID() == inboundLeg.ID
 	}, 5*time.Second)
 }
 
@@ -1669,7 +1654,7 @@ func TestCreateLeg_RoomID_AutoJoinOnConnect(t *testing.T) {
 
 	// Verify leg.joined_room event.
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// Verify room shows the participant.
@@ -1724,7 +1709,7 @@ func TestCreateLeg_RoomID_AutoJoinOnEarlyMedia(t *testing.T) {
 
 	// Verify leg.joined_room event fired during early media.
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == rm.ID
 	}, 3*time.Second)
 
 	// B answers — leg stays in room, transitions to connected.
@@ -1776,7 +1761,7 @@ func TestCreateLeg_RoomID_AutoCreateRoom(t *testing.T) {
 
 	// Verify room was auto-created.
 	instA.collector.waitForMatch(t, events.RoomCreated, func(e events.Event) bool {
-		return e.Data["room_id"] == roomID
+		return e.Data.GetRoomID() == roomID
 	}, 3*time.Second)
 
 	getResp2 := httpGet(t, fmt.Sprintf("%s/v1/rooms/%s", instA.baseURL(), roomID))
@@ -1796,7 +1781,7 @@ func TestCreateLeg_RoomID_AutoCreateRoom(t *testing.T) {
 	waitForLegState(t, instA.baseURL(), outboundLeg.ID, "connected", 5*time.Second)
 
 	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
-		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == roomID
+		return e.Data.GetLegID() == outboundLeg.ID && e.Data.GetRoomID() == roomID
 	}, 3*time.Second)
 
 	// Cleanup.
@@ -1983,7 +1968,7 @@ func TestSessionTimer_RefreshReInvite(t *testing.T) {
 
 	// B should see the hold event (re-INVITE was processed → timer was reset).
 	instB.collector.waitForMatch(t, events.LegHold, func(e events.Event) bool {
-		return e.Data["leg_id"] == inbound.ID
+		return e.Data.GetLegID() == inbound.ID
 	}, 5*time.Second)
 
 	// Unhold from A.
@@ -1994,7 +1979,7 @@ func TestSessionTimer_RefreshReInvite(t *testing.T) {
 	unholdResp.Body.Close()
 
 	instB.collector.waitForMatch(t, events.LegUnhold, func(e events.Event) bool {
-		return e.Data["leg_id"] == inbound.ID
+		return e.Data.GetLegID() == inbound.ID
 	}, 5*time.Second)
 
 	// Verify both legs are still connected (session wasn't terminated).

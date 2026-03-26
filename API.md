@@ -1138,77 +1138,19 @@ Retrieve server-side ICE candidates gathered since the last call (trickle ICE). 
 
 ## Webhooks
 
-Register HTTP endpoints to receive real-time event notifications.
+Webhooks deliver real-time event notifications via HTTP POST. There are three ways to configure webhooks:
 
-### Webhook Object
+1. **Global webhook** — set via `WEBHOOK_URL` and `WEBHOOK_SECRET` environment variables. Receives all events that don't have a more specific webhook.
+2. **Per-leg webhook** — set via `webhook_url` / `webhook_secret` in the create leg request body, or via `X-Webhook-URL` / `X-Webhook-Secret` SIP headers on inbound calls.
+3. **Per-room webhook** — set via `webhook_url` / `webhook_secret` in the create room request body.
 
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "url": "https://example.com/webhook",
-  "secret": "my-secret"
-}
-```
+### Routing Priority
 
----
-
-### POST /v1/webhooks
-
-Register a webhook.
-
-**Request:**
-
-```json
-{
-  "url": "https://example.com/webhook",
-  "secret": "optional-hmac-secret"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `url` | string | yes | Webhook delivery URL |
-| `secret` | string | no | HMAC-SHA256 signing secret |
-
-**Response:** `201 Created` — Webhook object
-
-**Errors:** `400` — Invalid JSON or missing URL
-
----
-
-### GET /v1/webhooks
-
-List all registered webhooks.
-
-**Response:** `200 OK` — Array of Webhook objects
-
----
-
-### DELETE /v1/webhooks/{id}
-
-Unregister a webhook.
-
-**Response:** `200 OK`
-
-```json
-{ "status": "deleted" }
-```
-
-**Errors:** `404` — Webhook not found
-
----
-
-### Per-Resource Webhooks
-
-Each leg or room can have its own webhook URL assigned at creation time (`webhook_url` / `webhook_secret` in the POST request body). When set, all events for that resource are routed exclusively to the resource-specific webhook and are not sent to any global webhook.
-
-Global webhooks registered via `POST /v1/webhooks` act as a catch-all: they receive events only from resources that have no resource-specific webhook set.
-
-**Routing priority (highest to lowest):**
+When an event is emitted, webhooks are resolved in this order (highest to lowest):
 
 1. **Leg's webhook** — used when the event carries a `leg_id` and that leg has a `webhook_url` set.
 2. **Room's webhook** — used when the event has a `room_id` (but no matching leg webhook) and that room has a `webhook_url` set.
-3. **Global webhooks** — used for all other events.
+3. **Global webhook** — used for all other events (configured via `WEBHOOK_URL` env var).
 
 For events that carry both `leg_id` and `room_id` (e.g. `speaking.started`, `stt.text`), the leg's webhook takes precedence over the room's webhook.
 
@@ -1241,31 +1183,37 @@ The signature is computed over the raw JSON request body using HMAC-SHA256 with 
 
 ### Event Envelope
 
+Event data fields are flattened into the top-level JSON object alongside the envelope fields — there is no `"data"` wrapper.
+
 ```json
 {
   "type": "leg.ringing",
   "timestamp": "2026-03-01T11:05:00.123Z",
   "instance_id": "550e8400-e29b-41d4-a716-446655440000",
-  "data": { ... }
+  "leg_id": "550e8400-e29b-41d4-a716-446655440000",
+  "from": "sip:alice@example.com",
+  "to": "sip:bob@example.com"
 }
 ```
 
-All API responses include `instance_id` as the first field in the JSON body.
+All events include `instance_id` alongside the event-specific fields.
 
 ### Event Types
+
+All event data uses typed structs with consistent field names. Events scoped to a leg include `leg_id`, events scoped to a room include `room_id`, and events that can target either include both (with the unused field omitted).
 
 | Event | Description | Data Fields |
 |-------|-------------|-------------|
 | `leg.ringing` | SIP call ringing | `leg_id`, `from`, `to` (inbound); `leg_id`, `uri`, `from` (outbound). `sip_headers` included when `X-*` headers are present. |
-| `leg.early_media` | Outbound leg received 183 Session Progress with SDP; media pipeline active | `leg_id`, `type` |
-| `leg.connected` | Leg answered/connected | `leg_id` |
-| `leg.disconnected` | Leg hung up | `leg_id`, `reason`, `duration_total`, `duration_answered` |
+| `leg.early_media` | Outbound leg received 183 Session Progress with SDP; media pipeline active | `leg_id`, `leg_type` |
+| `leg.connected` | Leg answered/connected | `leg_id`, `leg_type` |
+| `leg.disconnected` | Leg hung up | `leg_id`, `disposition`, `timing`, `quality` (see CDR-style structure below) |
 | `leg.joined_room` | Leg added to room | `leg_id`, `room_id` |
 | `leg.left_room` | Leg removed from room | `leg_id`, `room_id` |
 | `leg.muted` | Leg muted | `leg_id` |
 | `leg.unmuted` | Leg unmuted | `leg_id` |
-| `leg.hold` | Leg put on hold (local or remote) | `leg_id`, `type` |
-| `leg.unhold` | Leg taken off hold (local or remote) | `leg_id`, `type` |
+| `leg.hold` | Leg put on hold (local or remote) | `leg_id`, `leg_type` |
+| `leg.unhold` | Leg taken off hold (local or remote) | `leg_id`, `leg_type` |
 | `dtmf.received` | DTMF digit received | `leg_id`, `digit` |
 | `speaking.started` | Participant started speaking (room only) | `leg_id`, `room_id` |
 | `speaking.stopped` | Participant stopped speaking (room only) | `leg_id`, `room_id` |
@@ -1288,13 +1236,73 @@ All API responses include `instance_id` as the first field in the JSON body.
 | `room.created` | Room created | `room_id` |
 | `room.deleted` | Room deleted | `room_id` |
 
-#### `leg.disconnected` Duration Fields
+#### `leg.disconnected` — CDR-Style Structure
+
+The `leg.disconnected` event uses nested objects for disposition, timing, and quality metrics.
+
+**Answered call with quality metrics:**
+
+```json
+{
+  "type": "leg.disconnected",
+  "timestamp": "2026-03-24T14:30:00.123Z",
+  "instance_id": "inst-abc",
+  "leg_id": "550e8400-e29b-41d4-a716-446655440000",
+  "disposition": {
+    "reason": "remote_bye"
+  },
+  "timing": {
+    "duration_total": 125.43,
+    "duration_answered": 120.10
+  },
+  "quality": {
+    "mos_score": 4.21,
+    "rtp_packets_received": 6025,
+    "rtp_packets_lost": 12,
+    "rtp_jitter_ms": 3.45
+  }
+}
+```
+
+**Unanswered call (no quality):**
+
+```json
+{
+  "type": "leg.disconnected",
+  "timestamp": "2026-03-24T14:30:08.650Z",
+  "instance_id": "inst-abc",
+  "leg_id": "550e8400-e29b-41d4-a716-446655440000",
+  "disposition": {
+    "reason": "caller_cancel"
+  },
+  "timing": {
+    "duration_total": 8.52,
+    "duration_answered": 0
+  }
+}
+```
+
+#### `disposition` Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reason` | string | See **Disconnect Reasons** below |
+
+#### `timing` Object
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `duration_total` | float | Seconds from leg creation (INVITE sent/received) to disconnect |
 | `duration_answered` | float | Seconds from answer (200 OK) to disconnect. `0` if the leg was never answered. |
-| `reason` | string | See **Disconnect Reasons** below |
+
+#### `quality` Object (omitted when no media was received)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mos_score` | float | Mean Opinion Score (1.0–5.0) estimated via simplified E-model (ITU-T G.107) from packet loss and jitter |
+| `rtp_packets_received` | integer | Total inbound RTP audio packets received |
+| `rtp_packets_lost` | integer | Estimated lost packets based on sequence number gaps |
+| `rtp_jitter_ms` | float | Inter-arrival jitter in milliseconds (RFC 3550 §A.8) |
 
 **Disconnect Reasons:**
 
@@ -1347,7 +1355,8 @@ All errors return:
 | `ICE_SERVERS` | `stun:stun.l.google.com:19302` | STUN/TURN URLs (comma-separated) |
 | `RECORDING_DIR` | `/tmp/recordings` | Recording output directory |
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
-| `WEBHOOK_URL` | _(none)_ | Assigns a per-leg webhook URL for inbound SIP calls (overridden by the `X-Webhook-URL` SIP header). Not a global webhook — events for legs created from inbound SIP calls are routed to this URL unless the SIP header overrides it. |
+| `WEBHOOK_URL` | _(none)_ | Global webhook URL. Events without a per-leg or per-room webhook are delivered here. |
+| `WEBHOOK_SECRET` | _(none)_ | HMAC-SHA256 signing secret for the global webhook. |
 | `ELEVENLABS_API_KEY` | _(none)_ | Default ElevenLabs API key for TTS, STT, and Agent features (can be overridden per-request via `api_key` in the request body) |
 | `VAPI_API_KEY` | _(none)_ | Default VAPI API key for Agent features when `provider=vapi` (can be overridden per-request via `api_key` in the request body) |
 | `S3_BUCKET` | _(none)_ | S3 bucket name (required for `storage=s3` recordings) |
@@ -1373,8 +1382,7 @@ All errors return:
 ## Typical Workflow
 
 ```
-1. Register webhook
-   POST /v1/webhooks  {"url": "https://my-app.com/events"}
+1. Configure global webhook via WEBHOOK_URL env var, or per-leg via request/SIP headers
 
 2. Receive inbound call -> webhook: leg.ringing {leg_id, from, to}
 

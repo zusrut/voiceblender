@@ -1,2463 +1,2349 @@
 openapi: 3.1.0
 info:
-  title: VoiceBlender API
-  description: >
-    VoiceBlender bridges SIP and WebRTC voice calls with multi-party audio
-    mixing, real-time speech-to-text, text-to-speech, AI agent integration,
-    recording, and webhook-based event delivery.
-
-
-    **Configuration environment variables:**
-    `INSTANCE_ID` (auto-generated UUID; included in all API response bodies and
-    webhook events), `HTTP_ADDR` (:8080), `SIP_BIND_IP`, `SIP_PORT`, `SIP_HOST`,
-    `ICE_SERVERS`, `RECORDING_DIR`, `LOG_LEVEL`, `WEBHOOK_URL`,
-    `ELEVENLABS_API_KEY`, `VAPI_API_KEY` (VAPI agent provider API key),
-    `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_PREFIX`,
-    `TTS_CACHE_ENABLED` (default: `false`; when `true`, synthesized TTS audio is cached on disk),
-    `TTS_CACHE_DIR` (default: `/tmp/tts_cache`; directory for cached TTS audio files, used when `TTS_CACHE_ENABLED=true`),
-    `TTS_CACHE_INCLUDE_API_KEY` (default: `false`; when `true`, the API key is included in the cache key so different keys produce separate cache entries).
-  version: 1.0.0
-  license:
-    name: MIT
-
+    title: VoiceBlender API
+    description: |
+        VoiceBlender bridges SIP and WebRTC voice calls with multi-party audio mixing, real-time speech-to-text, text-to-speech, AI agent integration, recording, and webhook-based event delivery.
+    x-config-vars:
+        - name: INSTANCE_ID
+          default: (auto-generated UUID)
+          description: Instance identifier included in all API responses and webhook events
+        - name: HTTP_ADDR
+          default: :8080
+          description: REST API listen address
+        - name: SIP_BIND_IP
+          default: 127.0.0.1
+          description: IP used in SDP, Contact, and Via headers
+        - name: SIP_LISTEN_IP
+          default: (same as SIP_BIND_IP)
+          description: UDP socket bind IP
+        - name: SIP_PORT
+          default: "5060"
+          description: SIP listen port
+        - name: SIP_HOST
+          default: voiceblender
+          description: SIP User-Agent name
+        - name: ICE_SERVERS
+          default: stun:stun.l.google.com:19302
+          description: STUN/TURN URLs for WebRTC ICE, comma-separated
+        - name: RECORDING_DIR
+          default: /tmp/recordings
+          description: Local directory for recording output files
+        - name: LOG_LEVEL
+          default: info
+          description: 'Log verbosity: debug, info, warn, error'
+        - name: WEBHOOK_URL
+          default: ""
+          description: Global webhook URL for event delivery (fallback when no per-leg or per-room webhook is set)
+        - name: WEBHOOK_SECRET
+          default: ""
+          description: HMAC-SHA256 signing secret for the global webhook
+        - name: ELEVENLABS_API_KEY
+          default: ""
+          description: API key for ElevenLabs TTS, STT, and Agent provider
+        - name: VAPI_API_KEY
+          default: ""
+          description: API key for VAPI Agent provider
+        - name: S3_BUCKET
+          default: ""
+          description: S3 bucket name for recording uploads
+        - name: S3_REGION
+          default: us-east-1
+          description: AWS region for S3
+        - name: S3_ENDPOINT
+          default: ""
+          description: Custom S3-compatible endpoint (e.g. MinIO)
+        - name: S3_PREFIX
+          default: ""
+          description: Key prefix applied to all S3 objects
+        - name: TTS_CACHE_ENABLED
+          default: "false"
+          description: Enable disk-backed TTS audio cache; cached audio persists across restarts
+        - name: TTS_CACHE_DIR
+          default: /tmp/tts_cache
+          description: Directory for cached TTS audio files (used when TTS_CACHE_ENABLED=true)
+        - name: TTS_CACHE_INCLUDE_API_KEY
+          default: "false"
+          description: Include API key in TTS cache key; set true if different keys map to different voice clones
+    version: 1.0.0
+    license:
+        name: MIT
 servers:
-  - url: http://localhost:8080/v1
-    description: Local development server
-
+    - url: http://localhost:8080/v1
+      description: Local development server
 tags:
-  - name: Legs
-    description: Voice call legs (SIP or WebRTC)
-  - name: Rooms
-    description: Multi-party audio conference rooms
-  - name: WebRTC
-    description: WebRTC peer connection establishment
-  - name: Webhooks
-    description: Webhook registration and management
-  - name: Observability
-    description: Metrics and health endpoints
-
+    - name: Legs
+      description: Voice call legs (SIP or WebRTC)
+    - name: Rooms
+      description: Multi-party audio conference rooms
+    - name: WebRTC
+      description: WebRTC peer connection establishment
+    - name: Observability
+      description: Metrics and health endpoints
 paths:
-  # ── Legs ────────────────────────────────────────────────────────────────
-  /legs:
-    post:
-      operationId: createLeg
-      summary: Originate an outbound SIP call
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateLegRequest'
-      responses:
-        '201':
-          description: Leg created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Leg'
-        '400':
-          description: Invalid JSON, bad SIP URI, unknown codec, or unsupported type
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    get:
-      operationId: listLegs
-      summary: List all active legs
-      tags: [Legs]
-      responses:
-        '200':
-          description: Array of legs
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Leg'
-
-  /legs/{id}:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-
-    get:
-      operationId: getLeg
-      summary: Get a single leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Leg details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Leg'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-
-    delete:
-      operationId: deleteLeg
-      summary: Hang up a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Leg hung up
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: hung_up
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-
-  /legs/{id}/answer:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: answerLeg
-      summary: Answer a ringing or early-media inbound SIP leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Answer initiated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: answering
-        '400':
-          description: Not a SIP inbound leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg is not in ringing or early_media state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/early-media:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: earlyMediaLeg
-      summary: Enable early media on a ringing inbound SIP leg
-      description: >
-        Sends SIP 183 Session Progress with SDP and sets up the media pipeline.
-        The leg transitions to `early_media` state, allowing audio playback and
-        room participation before the call is answered.
-      tags: [Legs]
-      responses:
-        '200':
-          description: Early media enabled
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: early_media
-        '400':
-          description: Not a SIP inbound leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg is not in ringing state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Media setup failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/mute:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: muteLeg
-      summary: Mute a leg
-      description: >
-        A muted leg's audio is excluded from the room mix and speaking events
-        are suppressed. Taps (recording/STT) still receive the muted leg's own audio.
-      tags: [Legs]
-      responses:
-        '200':
-          description: Leg muted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: muted
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-
-    delete:
-      operationId: unmuteLeg
-      summary: Unmute a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Leg unmuted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: unmuted
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-
-  /legs/{id}/hold:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: holdLeg
-      summary: Put a SIP call on hold
-      description: >
-        Sends a re-INVITE with `sendonly` SDP direction. The RTP timeout is
-        paused while held, and a 2-hour auto-hangup timer starts.
-      tags: [Legs]
-      responses:
-        '200':
-          description: Call held
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: held
-        '400':
-          description: Not a SIP leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg is not in connected state, or already held
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: unholdLeg
-      summary: Resume a held SIP call
-      description: Sends a re-INVITE with `sendrecv` SDP direction.
-      tags: [Legs]
-      responses:
-        '200':
-          description: Call resumed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: resumed
-        '400':
-          description: Not a SIP leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg is not held
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/dtmf:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: sendDTMF
-      summary: Send DTMF digits on a leg
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DTMFRequest'
-      responses:
-        '200':
-          description: Digits sent
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: sent
-        '400':
-          description: Invalid JSON or empty digits
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '500':
-          description: DTMF writer unavailable
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/play:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: playLeg
-      summary: Start audio playback to a leg
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PlaybackRequest'
-      responses:
-        '200':
-          description: Playback started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlaybackResponse'
-        '400':
-          description: Invalid JSON or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg has no audio writer
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/play/{playbackID}:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-      - $ref: '#/components/parameters/PlaybackId'
-    patch:
-      operationId: volumePlayLeg
-      summary: Change the volume of an active leg playback
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VolumeRequest'
-      responses:
-        '200':
-          description: Volume updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: ok
-        '400':
-          description: Invalid JSON or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Playback not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-    delete:
-      operationId: stopPlayLeg
-      summary: Stop audio playback on a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Playback stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: stopped
-        '404':
-          description: No playback in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/tts:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: ttsLeg
-      summary: Synthesize speech and play it on a leg
-      description: >
-        Synthesizes the provided text using the configured TTS provider and plays the audio on the leg.
-        When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TTSRequest'
-      responses:
-        '200':
-          description: TTS playback started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TTSResponse'
-        '400':
-          description: Invalid JSON, missing text/voice, or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg has no audio writer
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No API key provided for the selected provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/record:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: recordLeg
-      summary: Start recording a leg to a WAV file
-      description: >
-        For SIP legs, recording is stereo (left=incoming, right=outgoing).
-        For legs in a room, stereo at 16kHz (left=participant audio, right=mixed-minus-self).
-      tags: [Legs]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RecordingRequest'
-      responses:
-        '200':
-          description: Recording started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecordingResponse'
-        '400':
-          description: Invalid storage type, S3 not configured, or invalid S3 credentials
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg has no audio reader or room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Failed to create recording file
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopRecordLeg
-      summary: Stop recording a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Recording stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecordingStopResponse'
-        '404':
-          description: No recording in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/stt:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: sttLeg
-      summary: Start real-time speech-to-text on a leg
-      tags: [Legs]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/STTRequest'
-      responses:
-        '200':
-          description: STT started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: stt_started
-                  leg_id:
-                    type: string
-                required: [status, leg_id]
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg not connected, STT already running, or no audio reader
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No ElevenLabs API key provided
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopSTTLeg
-      summary: Stop speech-to-text on a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: STT stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: stt_stopped
-        '404':
-          description: No STT in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/agent:
-    parameters:
-      - $ref: '#/components/parameters/LegId'
-    post:
-      operationId: agentLeg
-      summary: Attach an AI agent to a leg
-      description: >
-        Bridges audio bidirectionally with a conversational AI agent.
-        Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.
-        Standalone legs use direct audio; legs in a room use mixer taps.
-      tags: [Legs]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AgentRequest'
-      responses:
-        '200':
-          description: Agent started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: agent_started
-                  leg_id:
-                    type: string
-                required: [status, leg_id]
-        '400':
-          description: Invalid JSON or missing agent_id
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/LegNotFound'
-        '409':
-          description: Leg not connected, agent already attached, or no audio reader/writer
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No API key provided for the selected provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopAgentLeg
-      summary: Detach the agent from a leg
-      tags: [Legs]
-      responses:
-        '200':
-          description: Agent stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: agent_stopped
-        '404':
-          description: No agent attached to this leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  # ── Rooms ───────────────────────────────────────────────────────────────
-  /rooms:
-    post:
-      operationId: createRoom
-      summary: Create a room
-      tags: [Rooms]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RoomCreateRequest'
-      responses:
-        '201':
-          description: Room created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Room'
-        '409':
-          description: Room ID already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    get:
-      operationId: listRooms
-      summary: List all rooms with participants
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Array of rooms
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Room'
-
-  /rooms/{id}:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-
-    get:
-      operationId: getRoom
-      summary: Get a room with participants
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Room details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Room'
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-
-    delete:
-      operationId: deleteRoom
-      summary: Delete a room
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Room deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: deleted
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-
-  /rooms/{id}/legs:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: addLegToRoom
-      summary: Add or move a leg to a room
-      description: >
-        Add a leg to a room (auto-creates room if it doesn't exist).
-        If the leg is already in a different room, it is atomically moved
-        to the target room. A ringing inbound SIP leg is automatically
-        answered before being added.
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AddLegRequest'
-      responses:
-        '200':
-          description: Leg added or moved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: added
-        '400':
-          description: Invalid JSON, leg not found, or leg not connected
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/legs/{legID}:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-      - name: legID
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Leg ID
-    put:
-      operationId: moveLegToRoom
-      summary: Move a leg to a different room
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                to_room_id:
-                  type: string
-                  description: Destination room ID
-              required: [to_room_id]
-      responses:
-        '200':
-          description: Leg moved
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: moved
-                  from:
-                    type: string
-                    description: Source room ID
-                  to:
-                    type: string
-                    description: Destination room ID
-                required: [status, from, to]
-        '400':
-          description: Invalid JSON, leg not found, or move not possible
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: removeLegFromRoom
-      summary: Remove a leg from a room
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Leg removed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: removed
-        '400':
-          description: Room or leg not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/play:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: playRoom
-      summary: Play audio to a room
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PlaybackRequest'
-      responses:
-        '200':
-          description: Playback started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlaybackResponse'
-        '400':
-          description: Invalid JSON or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-        '409':
-          description: Room has no participants
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/play/{playbackID}:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-      - $ref: '#/components/parameters/PlaybackId'
-    patch:
-      operationId: volumePlayRoom
-      summary: Change the volume of an active room playback
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VolumeRequest'
-      responses:
-        '200':
-          description: Volume updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: ok
-        '400':
-          description: Invalid JSON or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Playback not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-    delete:
-      operationId: stopPlayRoom
-      summary: Stop room playback
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Playback stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: stopped
-        '404':
-          description: No playback in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/tts:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: ttsRoom
-      summary: Synthesize speech and play it into a room
-      description: >
-        Synthesizes the provided text using the configured TTS provider and plays the audio into the room.
-        When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TTSRequest'
-      responses:
-        '200':
-          description: TTS playback started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TTSResponse'
-        '400':
-          description: Invalid JSON, missing text/voice, or volume out of range
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-        '409':
-          description: Room has no participants
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No API key provided for the selected provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/record:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: recordRoom
-      summary: Start recording the room mix to a WAV file
-      description: Records the full room mix at 16kHz, 16-bit, mono.
-      tags: [Rooms]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RecordingRequest'
-      responses:
-        '200':
-          description: Recording started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecordingResponse'
-        '400':
-          description: Invalid storage type, S3 not configured, or invalid S3 credentials
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-        '409':
-          description: Room has no participants
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Failed to create recording file
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopRecordRoom
-      summary: Stop room recording
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Recording stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecordingStopResponse'
-        '404':
-          description: No recording in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/stt:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: sttRoom
-      summary: Start speech-to-text on all room participants
-      tags: [Rooms]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/STTRequest'
-      responses:
-        '200':
-          description: STT started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: stt_started
-                  room_id:
-                    type: string
-                  leg_ids:
-                    type: array
-                    items:
-                      type: string
-                required: [status, room_id, leg_ids]
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-        '409':
-          description: STT already running or room has no participants
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No ElevenLabs API key provided
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopSTTRoom
-      summary: Stop speech-to-text on a room
-      tags: [Rooms]
-      responses:
-        '200':
-          description: STT stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: stt_stopped
-        '404':
-          description: No STT in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/agent:
-    parameters:
-      - $ref: '#/components/parameters/RoomId'
-    post:
-      operationId: agentRoom
-      summary: Attach an AI agent to a room
-      description: >
-        The agent joins as a virtual participant, hearing all participants
-        (mixed-minus-self) and speaking to everyone.
-        Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.
-      tags: [Rooms]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AgentRequest'
-      responses:
-        '200':
-          description: Agent started
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: agent_started
-                  room_id:
-                    type: string
-                required: [status, room_id]
-        '400':
-          description: Invalid JSON or missing agent_id
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/RoomNotFound'
-        '409':
-          description: Agent already attached to this room
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: No API key provided for the selected provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      operationId: stopAgentRoom
-      summary: Detach the agent from a room
-      tags: [Rooms]
-      responses:
-        '200':
-          description: Agent stopped
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: agent_stopped
-        '404':
-          description: No agent attached to this room
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /rooms/{id}/ws:
-    get:
-      operationId: wsRoom
-      summary: WebSocket audio stream for a room
-      tags: [Rooms]
-      description: >
-        Upgrades to a WebSocket connection and joins the room as a bidirectional
-        audio participant. The client sends and receives 16kHz 16-bit signed
-        little-endian PCM audio (mono), base64-encoded in JSON text frames.
-        Each audio frame is 640 bytes (20ms).
-      parameters:
-        - $ref: '#/components/parameters/RoomId'
-      responses:
-        '101':
-          description: >
-            WebSocket upgrade successful. Server sends a `connected` message
-            followed by mixed-minus-self audio frames.
-        '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  # ── WebRTC ──────────────────────────────────────────────────────────────
-  /webrtc/offer:
-    post:
-      operationId: webrtcOffer
-      summary: Establish a WebRTC leg via SDP offer/answer
-      tags: [WebRTC]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/WebRTCOfferRequest'
-      responses:
-        '200':
-          description: SDP answer with leg ID
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  leg_id:
-                    type: string
-                    description: ID of the created WebRTC leg
-                  sdp:
-                    type: string
-                    description: SDP answer
-                required: [leg_id, sdp]
-        '400':
-          description: Invalid JSON or invalid SDP offer
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Peer connection, track creation, or answer generation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /legs/{id}/ice-candidates:
-    post:
-      operationId: addICECandidate
-      summary: Send a remote ICE candidate to a WebRTC leg (trickle ICE)
-      tags: [WebRTC]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ICECandidateInit'
-      responses:
-        '200':
-          description: Candidate added
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  status:
-                    type: string
-                    example: added
-        '400':
-          description: Invalid JSON or leg is not a WebRTC leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Leg not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Failed to add ICE candidate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    get:
-      operationId: getICECandidates
-      summary: Get server-side ICE candidates for a WebRTC leg (trickle ICE)
-      tags: [WebRTC]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Buffered ICE candidates
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  instance_id:
-                    type: string
-                    description: Instance identifier
-                  candidates:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ICECandidateInit'
-                  done:
-                    type: boolean
-                    description: true when ICE gathering is complete
-                required: [candidates, done]
-        '400':
-          description: Leg is not a WebRTC leg
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Leg not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  # ── Webhooks ────────────────────────────────────────────────────────────
-  /webhooks:
-    post:
-      operationId: registerWebhook
-      summary: Register a webhook
-      tags: [Webhooks]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/WebhookRequest'
-      responses:
-        '201':
-          description: Webhook registered
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Webhook'
-        '400':
-          description: Invalid JSON or missing URL
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    get:
-      operationId: listWebhooks
-      summary: List all registered webhooks
-      tags: [Webhooks]
-      responses:
-        '200':
-          description: Array of webhooks
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Webhook'
-
-  /webhooks/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Webhook ID
-    delete:
-      operationId: deleteWebhook
-      summary: Unregister a webhook
-      tags: [Webhooks]
-      responses:
-        '200':
-          description: Webhook deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-              example:
-                status: deleted
-        '404':
-          description: Webhook not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  # ── Observability ───────────────────────────────────────────────────────────
-  /metrics:
-    get:
-      operationId: getMetrics
-      summary: Prometheus metrics
-      description: >
-        Returns Prometheus-format metrics (text/plain exposition format).
-        Includes VoiceBlender-specific metrics and standard Go runtime metrics.
-      tags: [Observability]
-      responses:
-        '200':
-          description: Prometheus text exposition format
-          content:
-            text/plain:
+    /legs:
+        post:
+            operationId: createLeg
+            summary: Originate an outbound SIP call
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/CreateLegRequest'
+            responses:
+                '201':
+                    description: Leg created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Leg'
+                '400':
+                    description: Invalid JSON, bad SIP URI, unknown codec, or unsupported type
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        get:
+            operationId: listLegs
+            summary: List all active legs
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Array of legs
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Leg'
+    /legs/{id}:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        get:
+            operationId: getLeg
+            summary: Get a single leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg details
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Leg'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: deleteLeg
+            summary: Hang up a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg hung up
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/answer:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: answerLeg
+            summary: Answer a ringing or early-media inbound SIP leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Answer initiated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Not a SIP inbound leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg is not in ringing or early_media state
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/early-media:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: earlyMediaLeg
+            summary: Enable early media on a ringing inbound SIP leg
+            description: Sends SIP 183 Session Progress with SDP and sets up the media pipeline. The leg transitions to `early_media` state, allowing audio playback and room participation before the call is answered.
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Early media enabled
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Not a SIP inbound leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg is not in ringing state
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: Media setup failed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/mute:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: muteLeg
+            summary: Mute a leg
+            description: A muted leg's audio is excluded from the room mix and speaking events are suppressed. Taps (recording/STT) still receive the muted leg's own audio.
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg muted
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: unmuteLeg
+            summary: Unmute a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Leg unmuted
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/hold:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: holdLeg
+            summary: Put a SIP call on hold
+            description: Sends a re-INVITE with `sendonly` SDP direction. The RTP timeout is paused while held, and a 2-hour auto-hangup timer starts.
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Call held
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Not a SIP leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg is not in connected state, or already held
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: unholdLeg
+            summary: Resume a held SIP call
+            description: Sends a re-INVITE with `sendrecv` SDP direction.
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Call resumed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Not a SIP leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg is not held
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/dtmf:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: sendDTMF
+            summary: Send DTMF digits on a leg
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/DTMFRequest'
+            responses:
+                '200':
+                    description: Digits sent
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or empty digits
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: DTMF writer unavailable
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/play:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: playLeg
+            summary: Start audio playback to a leg
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/PlaybackRequest'
+            responses:
+                '200':
+                    description: Playback started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg has no audio writer
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/play/{playbackID}:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+            - $ref: '#/components/parameters/PlaybackId'
+        patch:
+            operationId: volumePlayLeg
+            summary: Change the volume of an active leg playback
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/VolumeRequest'
+            responses:
+                '200':
+                    description: Volume updated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Playback not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopPlayLeg
+            summary: Stop audio playback on a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Playback stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No playback in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/tts:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: ttsLeg
+            summary: Synthesize speech and play it on a leg
+            description: Synthesizes the provided text using the configured TTS provider and plays the audio on the leg. When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/TTSRequest'
+            responses:
+                '200':
+                    description: TTS playback started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON, missing text/voice, or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg has no audio writer
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No API key provided for the selected provider
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/record:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: recordLeg
+            summary: Start recording a leg to a WAV file
+            description: For SIP legs, recording is stereo (left=incoming, right=outgoing). For legs in a room, stereo at 16kHz (left=participant audio, right=mixed-minus-self).
+            tags:
+                - Legs
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/RecordingRequest'
+            responses:
+                '200':
+                    description: Recording started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid storage type, S3 not configured, or invalid S3 credentials
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg has no audio reader or room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: Failed to create recording file
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopRecordLeg
+            summary: Stop recording a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Recording stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No recording in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/stt:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: sttLeg
+            summary: Start real-time speech-to-text on a leg
+            tags:
+                - Legs
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/STTRequest'
+            responses:
+                '200':
+                    description: STT started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg not connected, STT already running, or no audio reader
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No ElevenLabs API key provided
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopSTTLeg
+            summary: Stop speech-to-text on a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: STT stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No STT in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/agent:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: agentLeg
+            summary: Attach an AI agent to a leg
+            description: 'Bridges audio bidirectionally with a conversational AI agent. Supported providers: `elevenlabs` (default), `vapi`, `pipecat`. Standalone legs use direct audio; legs in a room use mixer taps.'
+            tags:
+                - Legs
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/AgentRequest'
+            responses:
+                '200':
+                    description: Agent started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or missing agent_id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Leg not connected, agent already attached, or no audio reader/writer
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No API key provided for the selected provider
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopAgentLeg
+            summary: Detach the agent from a leg
+            tags:
+                - Legs
+            responses:
+                '200':
+                    description: Agent stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No agent attached to this leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /legs/{id}/ice-candidates:
+        parameters:
+            - $ref: '#/components/parameters/LegId'
+        post:
+            operationId: addICECandidate
+            summary: Send a remote ICE candidate to a WebRTC leg (trickle ICE)
+            tags:
+                - WebRTC
+            responses:
+                '200':
+                    description: Candidate added
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or leg is not a WebRTC leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: Failed to add ICE candidate
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        get:
+            operationId: getICECandidates
+            summary: Get server-side ICE candidates for a WebRTC leg (trickle ICE)
+            tags:
+                - WebRTC
+            responses:
+                '200':
+                    description: Buffered ICE candidates
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Leg is not a WebRTC leg
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms:
+        post:
+            operationId: createRoom
+            summary: Create a room
+            tags:
+                - Rooms
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/RoomCreateRequest'
+            responses:
+                '201':
+                    description: Room created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Room'
+                '409':
+                    description: Room ID already exists
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        get:
+            operationId: listRooms
+            summary: List all rooms with participants
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Array of rooms
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Room'
+    /rooms/{id}:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        get:
+            operationId: getRoom
+            summary: Get a room with participants
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Room details
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Room'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: deleteRoom
+            summary: Delete a room
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Room deleted
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/legs:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: addLegToRoom
+            summary: Add or move a leg to a room
+            description: Add a leg to a room (auto-creates room if it doesn't exist). If the leg is already in a different room, it is atomically moved to the target room. A ringing inbound SIP leg is automatically answered before being added.
+            tags:
+                - Rooms
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/AddLegRequest'
+            responses:
+                '200':
+                    description: Leg added or moved
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON, leg not found, or leg not connected
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/legs/{legID}:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+            - name: legID
+              in: path
+              required: true
               schema:
                 type: string
-              example: |
-                # HELP voiceblender_active_legs Number of legs currently active.
-                # TYPE voiceblender_active_legs gauge
-                voiceblender_active_legs 3
-
-  /debug/pprof/:
-    get:
-      operationId: pprofIndex
-      summary: pprof index
-      description: >
-        Index of available Go runtime profiles. Only available when built with
-        `-tags pprof` (e.g. `go build -tags pprof ./...`).
-      tags: [Observability]
-      responses:
-        '200':
-          description: HTML index page listing available profiles
-          content:
-            text/html:
-              schema:
-                type: string
-
-  /debug/pprof/profile:
-    get:
-      operationId: pprofCPU
-      summary: CPU profile
-      description: >
-        30-second CPU profile (duration configurable via ?seconds= query param).
-        Only available when built with `-tags pprof`.
-      tags: [Observability]
-      parameters:
-        - name: seconds
-          in: query
-          schema:
-            type: integer
-            default: 30
-          description: Profile duration in seconds
-      responses:
-        '200':
-          description: pprof binary profile
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-
-  /debug/pprof/heap:
-    get:
-      operationId: pprofHeap
-      summary: Heap memory profile
-      description: Heap memory snapshot. Only available when built with `-tags pprof`.
-      tags: [Observability]
-      responses:
-        '200':
-          description: pprof binary profile
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-
-  /debug/pprof/goroutine:
-    get:
-      operationId: pprofGoroutine
-      summary: Goroutine stack traces
-      description: All goroutine stack traces. Only available when built with `-tags pprof`.
-      tags: [Observability]
-      responses:
-        '200':
-          description: pprof binary profile
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-
-# ════════════════════════════════════════════════════════════════════════════
+              description: Leg ID
+        delete:
+            operationId: removeLegFromRoom
+            summary: Remove a leg from a room
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Leg removed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Room or leg not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/play:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: playRoom
+            summary: Play audio to a room
+            tags:
+                - Rooms
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/PlaybackRequest'
+            responses:
+                '200':
+                    description: Playback started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Room has no participants
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/play/{playbackID}:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+            - $ref: '#/components/parameters/PlaybackId'
+        patch:
+            operationId: volumePlayRoom
+            summary: Change the volume of an active room playback
+            tags:
+                - Rooms
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/VolumeRequest'
+            responses:
+                '200':
+                    description: Volume updated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Playback not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopPlayRoom
+            summary: Stop room playback
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Playback stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No playback in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/tts:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: ttsRoom
+            summary: Synthesize speech and play it into a room
+            description: Synthesizes the provided text using the configured TTS provider and plays the audio into the room. When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
+            tags:
+                - Rooms
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/TTSRequest'
+            responses:
+                '200':
+                    description: TTS playback started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON, missing text/voice, or volume out of range
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Room has no participants
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No API key provided for the selected provider
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/record:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: recordRoom
+            summary: Start recording the room mix to a WAV file
+            description: Records the full room mix at 16kHz, 16-bit, mono.
+            tags:
+                - Rooms
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/RecordingRequest'
+            responses:
+                '200':
+                    description: Recording started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid storage type, S3 not configured, or invalid S3 credentials
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Room has no participants
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: Failed to create recording file
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopRecordRoom
+            summary: Stop room recording
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Recording stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No recording in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/stt:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: sttRoom
+            summary: Start speech-to-text on all room participants
+            tags:
+                - Rooms
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/STTRequest'
+            responses:
+                '200':
+                    description: STT started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: STT already running or room has no participants
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No ElevenLabs API key provided
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopSTTRoom
+            summary: Stop speech-to-text on a room
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: STT stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No STT in progress
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/agent:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        post:
+            operationId: agentRoom
+            summary: Attach an AI agent to a room
+            description: 'The agent joins as a virtual participant, hearing all participants (mixed-minus-self) and speaking to everyone. Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.'
+            tags:
+                - Rooms
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/AgentRequest'
+            responses:
+                '200':
+                    description: Agent started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or missing agent_id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '409':
+                    description: Agent already attached to this room
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '503':
+                    description: No API key provided for the selected provider
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        delete:
+            operationId: stopAgentRoom
+            summary: Detach the agent from a room
+            tags:
+                - Rooms
+            responses:
+                '200':
+                    description: Agent stopped
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '404':
+                    description: No agent attached to this room
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /rooms/{id}/ws:
+        parameters:
+            - $ref: '#/components/parameters/RoomId'
+        get:
+            operationId: wsRoom
+            summary: WebSocket audio stream for a room
+            description: Upgrades to a WebSocket connection and joins the room as a bidirectional audio participant. The client sends and receives 16kHz 16-bit signed little-endian PCM audio (mono), base64-encoded in JSON text frames. Each audio frame is 640 bytes (20ms).
+            tags:
+                - Rooms
+            responses:
+                '101':
+                    description: WebSocket upgrade successful. Server sends a `connected` message followed by mixed-minus-self audio frames.
+                '404':
+                    description: Room not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /webrtc/offer:
+        post:
+            operationId: webrtcOffer
+            summary: Establish a WebRTC leg via SDP offer/answer
+            tags:
+                - WebRTC
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/WebRTCOfferRequest'
+            responses:
+                '200':
+                    description: SDP answer with leg ID
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResponse'
+                '400':
+                    description: Invalid JSON or invalid SDP offer
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                '500':
+                    description: Peer connection, track creation, or answer generation failed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /metrics:
+        get:
+            operationId: getMetrics
+            summary: Prometheus metrics
+            description: |
+                Returns Prometheus-format metrics (text/plain exposition format). Includes VoiceBlender-specific metrics and standard Go runtime metrics.
+            tags:
+                - Observability
+            responses:
+                '200':
+                    description: Prometheus text exposition format
+                    content:
+                        text/plain:
+                            schema:
+                                type: string
+    /debug/pprof/:
+        get:
+            operationId: pprofIndex
+            summary: pprof index
+            description: |
+                Index of available Go runtime profiles. Only available when built with `-tags pprof` (e.g. `go build -tags pprof ./...`).
+            tags:
+                - Observability
+            responses:
+                '200':
+                    description: HTML index page listing available profiles
+                    content:
+                        text/html:
+                            schema:
+                                type: string
+    /debug/pprof/profile:
+        get:
+            operationId: pprofCPU
+            summary: CPU profile
+            description: |
+                30-second CPU profile (duration configurable via ?seconds= query param). Only available when built with `-tags pprof`.
+            tags:
+                - Observability
+            parameters:
+                - name: seconds
+                  in: query
+                  schema:
+                    type: integer
+                    default: 30
+                  description: Profile duration in seconds
+            responses:
+                '200':
+                    description: pprof binary profile
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+    /debug/pprof/heap:
+        get:
+            operationId: pprofHeap
+            summary: Heap memory profile
+            description: |
+                Heap memory snapshot. Only available when built with `-tags pprof`.
+            tags:
+                - Observability
+            responses:
+                '200':
+                    description: pprof binary profile
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+    /debug/pprof/goroutine:
+        get:
+            operationId: pprofGoroutine
+            summary: Goroutine stack traces
+            description: |
+                All goroutine stack traces. Only available when built with `-tags pprof`.
+            tags:
+                - Observability
+            responses:
+                '200':
+                    description: pprof binary profile
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
 components:
-  parameters:
-    LegId:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: string
-      description: Leg ID
-
-    RoomId:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: string
-      description: Room ID
-
-    PlaybackId:
-      name: playbackID
-      in: path
-      required: true
-      schema:
-        type: string
-      description: Playback ID
-
-  responses:
-    LegNotFound:
-      description: Leg not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-
-    RoomNotFound:
-      description: Room not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-
-  schemas:
-    # ── Core resources ──────────────────────────────────────────────────
-    Leg:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        leg_id:
-          type: string
-          description: Unique leg identifier (UUID)
-        type:
-          type: string
-          enum: [sip_inbound, sip_outbound, webrtc]
-        state:
-          type: string
-          enum: [ringing, early_media, connected, held, hung_up]
-        room_id:
-          type: string
-          description: Room ID if the leg is in a room, empty otherwise
-        muted:
-          type: boolean
-          description: Whether the leg is muted
-        held:
-          type: boolean
-          description: Whether the call is on hold (SIP legs only)
-        sip_headers:
-          type: object
-          additionalProperties:
+    parameters:
+        LegId:
+            name: id
+            in: path
+            required: true
+            schema:
+                type: string
+            description: Leg ID
+        RoomId:
+            name: id
+            in: path
+            required: true
+            schema:
+                type: string
+            description: Room ID
+        PlaybackId:
+            name: playbackID
+            in: path
+            required: true
+            schema:
+                type: string
+            description: Playback ID
+    responses:
+        LegNotFound:
+            description: Leg not found
+            content:
+                application/json:
+                    schema:
+                        $ref: '#/components/schemas/Error'
+        RoomNotFound:
+            description: Room not found
+            content:
+                application/json:
+                    schema:
+                        $ref: '#/components/schemas/Error'
+    schemas:
+        Leg:
+            type: object
+            properties:
+                instance_id:
+                    type: string
+                    description: Instance identifier
+                leg_id:
+                    type: string
+                    description: Unique leg identifier (UUID)
+                type:
+                    type: string
+                    description: Leg type
+                    enum:
+                        - sip_inbound
+                        - sip_outbound
+                        - webrtc
+                state:
+                    type: string
+                    description: Leg state
+                    enum:
+                        - ringing
+                        - early_media
+                        - connected
+                        - held
+                        - hung_up
+                room_id:
+                    type: string
+                    description: Room ID if the leg is in a room, empty otherwise
+                muted:
+                    type: boolean
+                    description: Whether the leg is muted
+                held:
+                    type: boolean
+                    description: Whether the call is on hold (SIP legs only)
+                sip_headers:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: X-* headers from the inbound INVITE. Only present on sip_inbound legs.
+            required:
+                - leg_id
+                - type
+                - state
+                - muted
+                - held
+        Room:
+            type: object
+            properties:
+                instance_id:
+                    type: string
+                    description: Instance identifier
+                id:
+                    type: string
+                    description: Room identifier
+                participants:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Leg'
+                    description: Legs currently in this room
+            required:
+                - id
+                - participants
+        Error:
+            type: object
+            properties:
+                instance_id:
+                    type: string
+                    description: Instance identifier
+                error:
+                    type: string
+                    description: Error message
+            required:
+                - error
+        StatusResponse:
+            type: object
+            properties:
+                instance_id:
+                    type: string
+                    description: Instance identifier
+                status:
+                    type: string
+            required:
+                - status
+        AddLegRequest:
+            type: object
+            properties:
+                leg_id:
+                    type: string
+                    description: ID of the leg to add
+            required:
+                - leg_id
+        AgentRequest:
+            type: object
+            properties:
+                agent_id:
+                    type: string
+                    description: Provider-specific agent/assistant ID. For Pipecat, this is the WebSocket URL of the bot (e.g. ws://my-bot:8765).
+                provider:
+                    type: string
+                    description: 'Agent provider: "elevenlabs" (default), "vapi", or "pipecat". elevenlabs: ElevenLabs ConvAI WebSocket API. vapi: VAPI conversational AI platform. pipecat: Self-hosted Pipecat bot; agent_id is the bot WebSocket URL.'
+                    enum:
+                        - elevenlabs
+                        - vapi
+                        - pipecat
+                first_message:
+                    type: string
+                    description: Override the agent's first message
+                language:
+                    type: string
+                    description: Language code (ElevenLabs only)
+                dynamic_variables:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: Key-value pairs passed to the agent
+                api_key:
+                    type: string
+                    description: API key override (falls back to ELEVENLABS_API_KEY or VAPI_API_KEY env var depending on provider). Not required for Pipecat.
+            required:
+                - agent_id
+        CreateLegRequest:
+            type: object
+            properties:
+                type:
+                    type: string
+                    description: Leg type
+                    enum:
+                        - sip
+                uri:
+                    type: string
+                    description: SIP URI to dial
+                from:
+                    type: string
+                    description: Caller ID — sets the user part of the SIP From header (e.g. "+15551234567", "alice")
+                privacy:
+                    type: string
+                    description: SIP Privacy header value (e.g. "id", "none")
+                ring_timeout:
+                    type: integer
+                    description: Seconds to wait for answer; 0 = no timeout
+                    default: 0
+                max_duration:
+                    type: integer
+                    description: Maximum call duration in seconds after connect. Automatically hung up when reached. 0 or omitted = no limit.
+                    default: 0
+                codecs:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - PCMU
+                            - PCMA
+                            - G722
+                            - opus
+                    description: Codec preference order
+                headers:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: Custom SIP headers to include in the outbound INVITE (e.g. X-Correlation-ID)
+                room_id:
+                    type: string
+                    description: Room ID to auto-add the leg to once media is ready (early_media or connected). If the room does not exist, it is automatically created.
+                auth:
+                    description: SIP digest authentication credentials. If the remote challenges with 401/407, sipgo will retry with these credentials.
+                    nullable: true
+                    allOf:
+                        - $ref: '#/components/schemas/SIPAuth'
+                webhook_url:
+                    type: string
+                    description: Route all events for this leg exclusively to this URL instead of global webhooks.
+                    format: uri
+                webhook_secret:
+                    type: string
+                    description: HMAC-SHA256 signing secret for the per-leg webhook.
+            required:
+                - type
+                - uri
+        RoomCreateRequest:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Custom room ID (auto-generated UUID if omitted)
+                webhook_url:
+                    type: string
+                    description: Route all events for this room exclusively to this URL instead of global webhooks.
+                    format: uri
+                webhook_secret:
+                    type: string
+                    description: HMAC-SHA256 signing secret for the per-room webhook.
+            required:
+                - id
+        DTMFRequest:
+            type: object
+            properties:
+                digits:
+                    type: string
+                    description: 'DTMF digits to send (0-9, *, #)'
+            required:
+                - digits
+        PlaybackRequest:
+            type: object
+            properties:
+                url:
+                    type: string
+                    description: URL of the audio file (mutually exclusive with tone)
+                    format: uri
+                tone:
+                    type: string
+                    description: 'Built-in telephone tone name. Format: {country}_{type} or bare {type} (defaults to US). Types: ringback, busy, dial, congestion. Countries: us, gb, de, fr, au, jp, it, in, br, pl, ru. Examples: us_ringback, gb_busy, dial.'
+                mime_type:
+                    type: string
+                    description: MIME type (e.g. audio/wav). Required when using url.
+                repeat:
+                    type: integer
+                    description: Number of times to repeat playback (url only)
+                    default: 0
+                volume:
+                    type: integer
+                    description: Volume adjustment in dB (-8 to 8)
+                    default: 0
+                    minimum: -8
+                    maximum: 8
+            required:
+                - url
+                - tone
+                - mime_type
+                - repeat
+                - volume
+            oneOf:
+                - required:
+                    - url
+                    - mime_type
+                - required:
+                    - tone
+        RecordingRequest:
+            type: object
+            properties:
+                storage:
+                    type: string
+                    description: '"file" (default) — local disk, "s3" — upload to S3 after recording stops'
+                    enum:
+                        - file
+                        - s3
+                s3_bucket:
+                    type: string
+                    description: S3 bucket name. Overrides S3_BUCKET env var. Required if env var is not set.
+                s3_region:
+                    type: string
+                    description: AWS region. Overrides S3_REGION env var. Default us-east-1.
+                s3_endpoint:
+                    type: string
+                    description: Custom S3 endpoint (MinIO, etc.). Overrides S3_ENDPOINT env var.
+                s3_prefix:
+                    type: string
+                    description: Key prefix (e.g. recordings/). Overrides S3_PREFIX env var.
+                s3_access_key:
+                    type: string
+                    description: AWS access key ID. Overrides default credential chain.
+                s3_secret_key:
+                    type: string
+                    description: AWS secret access key. Must be set together with s3_access_key.
+            required:
+                - storage
+                - s3_bucket
+                - s3_region
+                - s3_endpoint
+                - s3_prefix
+                - s3_access_key
+                - s3_secret_key
+        STTRequest:
+            type: object
+            properties:
+                language:
+                    type: string
+                    description: Language code (e.g. "en", "es")
+                partial:
+                    type: boolean
+                    description: Emit partial (non-final) transcripts
+                    default: false
+                api_key:
+                    type: string
+                    description: ElevenLabs API key override
+            required:
+                - language
+                - partial
+        TTSRequest:
+            type: object
+            properties:
+                text:
+                    type: string
+                    description: Text to synthesize
+                voice:
+                    type: string
+                    description: 'Provider-specific voice identifier. ElevenLabs: voice name or ID. AWS Polly: voice ID (e.g. Joanna, Matthew). Google Cloud: voice name — either full format (e.g. en-US-Neural2-F) or short name for Gemini models (e.g. Achernar, Kore).'
+                model_id:
+                    type: string
+                    description: 'Provider-specific model/engine. ElevenLabs: model ID. AWS Polly: engine (standard, neural, long-form, generative; default neural). Google Cloud: model name (e.g. gemini-2.5-pro-tts, chirp3-hd).'
+                language:
+                    type: string
+                    description: Language code (e.g. "en-US", "pl-pl"). Required for Google Gemini TTS voices that use short names (e.g. Achernar). Auto-extracted from full voice names like en-US-Neural2-F.
+                prompt:
+                    type: string
+                    description: Style/tone instruction for promptable voice models (Google Gemini TTS only). E.g. "Read aloud in a warm, welcoming tone."
+                volume:
+                    type: integer
+                    description: Volume adjustment in dB (-8 to 8)
+                    default: 0
+                    minimum: -8
+                    maximum: 8
+                provider:
+                    type: string
+                    description: 'TTS provider: "elevenlabs" (default), "aws", or "google"'
+                    enum:
+                        - elevenlabs
+                        - aws
+                        - google
+                api_key:
+                    type: string
+                    description: 'ElevenLabs: API key override (falls back to ELEVENLABS_API_KEY env var). AWS: optional ACCESS_KEY:SECRET_KEY override (falls back to default AWS credential chain). Google Cloud: optional API key override (falls back to Application Default Credentials).'
+            required:
+                - text
+                - voice
+                - model_id
+                - volume
+        VolumeRequest:
+            type: object
+            properties:
+                volume:
+                    type: integer
+                    description: Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged)
+                    minimum: -8
+                    maximum: 8
+            required:
+                - volume
+        WebRTCOfferRequest:
+            type: object
+            properties:
+                sdp:
+                    type: string
+                    description: SDP offer from the browser
+            required:
+                - sdp
+        SIPAuth:
+            type: object
+            properties:
+                username:
+                    type: string
+                    description: SIP auth username
+                password:
+                    type: string
+                    description: SIP auth password
+            required:
+                - username
+                - password
+        WebhookEvent:
+            type: object
+            description: Event envelope delivered via HTTP POST to registered webhook URLs. Event-specific fields are flattened into the top-level object (no "data" wrapper). Includes X-Signature-256 header when a secret is configured.
+            properties:
+                type:
+                    $ref: '#/components/schemas/WebhookEventType'
+                timestamp:
+                    type: string
+                    format: date-time
+                instance_id:
+                    type: string
+                    description: Instance identifier
+            required:
+                - type
+                - timestamp
+        WebhookEventType:
             type: string
-          description: 'X-* headers from the inbound INVITE. Only present on sip_inbound legs.'
-      required: [leg_id, type, state]
-
-    Room:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        id:
-          type: string
-          description: Room identifier
-        participants:
-          type: array
-          items:
-            $ref: '#/components/schemas/Leg'
-      required: [id, participants]
-
-    Webhook:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        id:
-          type: string
-          description: Webhook identifier (UUID)
-        url:
-          type: string
-          format: uri
-          description: Delivery URL
-        secret:
-          type: string
-          description: HMAC-SHA256 signing secret (omitted if not set)
-      required: [id, url]
-
-    Error:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        error:
-          type: string
-          description: Error message
-      required: [error]
-
-    StatusResponse:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        status:
-          type: string
-      required: [status]
-
-    # ── Request bodies ──────────────────────────────────────────────────
-    CreateLegRequest:
-      type: object
-      properties:
-        type:
-          type: string
-          enum: [sip]
-          description: Leg type
-        uri:
-          type: string
-          description: SIP URI to dial
-        from:
-          type: string
-          description: 'Caller ID — sets the user part of the SIP From header (e.g. "+15551234567", "alice")'
-        privacy:
-          type: string
-          description: SIP Privacy header value (e.g. "id", "none")
-        ring_timeout:
-          type: integer
-          description: Seconds to wait for answer; 0 = no timeout
-          default: 0
-        max_duration:
-          type: integer
-          description: Maximum call duration in seconds after connect. Automatically hung up when reached. 0 or omitted = no limit.
-          default: 0
-        codecs:
-          type: array
-          items:
-            type: string
-            enum: [PCMU, PCMA, G722, opus]
-          description: Codec preference order
-        headers:
-          type: object
-          additionalProperties:
-            type: string
-          description: Custom SIP headers to include in the outbound INVITE (e.g. X-Correlation-ID)
-        auth:
-          type: object
-          description: SIP digest authentication credentials. If the remote challenges with 401/407, sipgo will retry with these credentials.
-          properties:
-            username:
-              type: string
-              description: SIP auth username
-            password:
-              type: string
-              description: SIP auth password
-        room_id:
-          type: string
-          description: Room ID to auto-add the leg to once media is ready (early_media or connected). If the room does not exist, it is automatically created.
-        webhook_url:
-          type: string
-          format: uri
-          description: Route all events for this leg exclusively to this URL instead of global webhooks.
-        webhook_secret:
-          type: string
-          description: HMAC-SHA256 signing secret for the per-leg webhook.
-      required: [type, uri]
-
-    VolumeRequest:
-      type: object
-      properties:
-        volume:
-          type: integer
-          minimum: -8
-          maximum: 8
-          description: Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged)
-      required: [volume]
-
-    DTMFRequest:
-      type: object
-      properties:
-        digits:
-          type: string
-          description: 'DTMF digits to send (0-9, *, #)'
-      required: [digits]
-
-    PlaybackRequest:
-      type: object
-      properties:
-        url:
-          type: string
-          format: uri
-          description: URL of the audio file (mutually exclusive with tone)
-        tone:
-          type: string
-          description: >
-            Built-in telephone tone name. Format: {country}_{type} or bare {type} (defaults to US).
-            Types: ringback, busy, dial, congestion.
-            Countries: us, gb, de, fr, au, jp, it, in, br, pl, ru.
-            Examples: us_ringback, gb_busy, dial.
-        mime_type:
-          type: string
-          description: MIME type (e.g. audio/wav). Required when using url.
-        repeat:
-          type: integer
-          description: Number of times to repeat playback (url only)
-          default: 0
-        volume:
-          type: integer
-          description: Volume adjustment in dB (-8 to 8)
-          minimum: -8
-          maximum: 8
-          default: 0
-      oneOf:
-        - required: [url, mime_type]
-        - required: [tone]
-
-    TTSRequest:
-      type: object
-      properties:
-        text:
-          type: string
-          description: Text to synthesize
-        voice:
-          type: string
-          description: >
-            Provider-specific voice identifier. ElevenLabs: voice name or ID.
-            AWS Polly: voice ID (e.g. Joanna, Matthew). Google Cloud: voice name —
-            either full format (e.g. en-US-Neural2-F) or short name for Gemini
-            models (e.g. Achernar, Kore).
-        provider:
-          type: string
-          enum: [elevenlabs, aws, google]
-          description: 'TTS provider: "elevenlabs" (default), "aws", or "google"'
-        model_id:
-          type: string
-          description: >
-            Provider-specific model/engine. ElevenLabs: model ID.
-            AWS Polly: engine (standard, neural, long-form, generative; default neural).
-            Google Cloud: model name (e.g. gemini-2.5-pro-tts, chirp3-hd).
-        language:
-          type: string
-          description: >
-            Language code (e.g. "en-US", "pl-pl"). Required for Google Gemini TTS
-            voices that use short names (e.g. Achernar). Auto-extracted from full
-            voice names like en-US-Neural2-F.
-        prompt:
-          type: string
-          description: >
-            Style/tone instruction for promptable voice models (Google Gemini TTS only).
-            E.g. "Read aloud in a warm, welcoming tone."
-        volume:
-          type: integer
-          description: Volume adjustment in dB (-8 to 8)
-          minimum: -8
-          maximum: 8
-          default: 0
-        api_key:
-          type: string
-          description: >
-            ElevenLabs: API key override (falls back to ELEVENLABS_API_KEY env var).
-            AWS: optional ACCESS_KEY:SECRET_KEY override (falls back to default AWS
-            credential chain). Google Cloud: optional API key override (falls back
-            to Application Default Credentials).
-      required: [text, voice]
-
-    STTRequest:
-      type: object
-      properties:
-        language:
-          type: string
-          description: Language code (e.g. "en", "es")
-        partial:
-          type: boolean
-          description: Emit partial (non-final) transcripts
-          default: false
-        api_key:
-          type: string
-          description: ElevenLabs API key override
-
-    AgentRequest:
-      type: object
-      properties:
-        agent_id:
-          type: string
-          description: >
-            Provider-specific agent/assistant ID. For Pipecat, this is the
-            WebSocket URL of the bot (e.g. ws://my-bot:8765).
-        provider:
-          type: string
-          enum: [elevenlabs, vapi, pipecat]
-          description: >
-            Agent provider: "elevenlabs" (default), "vapi", or "pipecat".
-            elevenlabs: ElevenLabs ConvAI WebSocket API.
-            vapi: VAPI conversational AI platform.
-            pipecat: Self-hosted Pipecat bot; agent_id is the bot WebSocket URL.
-        first_message:
-          type: string
-          description: Override the agent's first message
-        language:
-          type: string
-          description: Language code (ElevenLabs only)
-        dynamic_variables:
-          type: object
-          additionalProperties:
-            type: string
-          description: Key-value pairs passed to the agent
-        api_key:
-          type: string
-          description: >
-            API key override (falls back to ELEVENLABS_API_KEY or VAPI_API_KEY env var
-            depending on provider). Not required for Pipecat.
-      required: [agent_id]
-
-    RecordingRequest:
-      type: object
-      properties:
-        storage:
-          type: string
-          enum: [file, s3]
-          description: '"file" (default) — local disk, "s3" — upload to S3 after recording stops'
-        s3_bucket:
-          type: string
-          description: S3 bucket name. Overrides S3_BUCKET env var. Required if env var is not set.
-        s3_region:
-          type: string
-          description: AWS region. Overrides S3_REGION env var. Default us-east-1.
-        s3_endpoint:
-          type: string
-          description: Custom S3 endpoint (MinIO, etc.). Overrides S3_ENDPOINT env var.
-        s3_prefix:
-          type: string
-          description: Key prefix (e.g. recordings/). Overrides S3_PREFIX env var.
-        s3_access_key:
-          type: string
-          description: AWS access key ID. Overrides default credential chain.
-        s3_secret_key:
-          type: string
-          description: AWS secret access key. Must be set together with s3_access_key.
-
-    WebRTCOfferRequest:
-      type: object
-      properties:
-        sdp:
-          type: string
-          description: SDP offer from the browser
-      required: [sdp]
-
-    ICECandidateInit:
-      type: object
-      properties:
-        candidate:
-          type: string
-          description: ICE candidate string
-        sdpMid:
-          type: string
-          description: Media stream identification tag
-        sdpMLineIndex:
-          type: integer
-          description: Index of the media description
-      required: [candidate]
-
-    WebhookRequest:
-      type: object
-      properties:
-        url:
-          type: string
-          format: uri
-          description: Webhook delivery URL
-        secret:
-          type: string
-          description: HMAC-SHA256 signing secret
-      required: [url]
-
-    RoomCreateRequest:
-      type: object
-      properties:
-        id:
-          type: string
-          description: Custom room ID (auto-generated UUID if omitted)
-        webhook_url:
-          type: string
-          format: uri
-          description: Route all events for this room exclusively to this URL instead of global webhooks.
-        webhook_secret:
-          type: string
-          description: HMAC-SHA256 signing secret for the per-room webhook.
-
-    AddLegRequest:
-      type: object
-      properties:
-        leg_id:
-          type: string
-          description: ID of the leg to add
-      required: [leg_id]
-
-    # ── Response bodies ─────────────────────────────────────────────────
-    PlaybackResponse:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        playback_id:
-          type: string
-          description: Unique playback identifier
-        status:
-          type: string
-          example: playing
-      required: [playback_id, status]
-
-    TTSResponse:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        tts_id:
-          type: string
-          description: Unique TTS playback identifier
-        status:
-          type: string
-          example: playing
-      required: [tts_id, status]
-
-    RecordingResponse:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        status:
-          type: string
-          example: recording
-        file:
-          type: string
-          description: Absolute path to the recording file (or s3://bucket/key URI when storage=s3)
-      required: [status, file]
-
-    RecordingStopResponse:
-      type: object
-      properties:
-        instance_id:
-          type: string
-          description: Instance identifier
-        status:
-          type: string
-          example: stopped
-        file:
-          type: string
-          description: Absolute path to the recording file (or s3://bucket/key URI when storage=s3)
-      required: [status, file]
-
-    # ── Webhook events ──────────────────────────────────────────────────
-    WebhookEvent:
-      type: object
-      description: >
-        Event envelope delivered via HTTP POST to registered webhook URLs.
-        Includes X-Signature-256 header when a secret is configured.
-        All API responses include `instance_id` as the first field in the JSON body.
-      properties:
-        type:
-          $ref: '#/components/schemas/WebhookEventType'
-        timestamp:
-          type: string
-          format: date-time
-        instance_id:
-          type: string
-          description: Instance identifier
-        data:
-          type: object
-          description: Event-specific payload
-      required: [type, timestamp, data]
-
-    WebhookEventType:
-      type: string
-      enum:
-        - leg.ringing
-        - leg.early_media
-        - leg.connected
-        - leg.disconnected
-        - leg.joined_room
-        - leg.left_room
-        - leg.muted
-        - leg.unmuted
-        - leg.hold
-        - leg.unhold
-        - dtmf.received
-        - speaking.started
-        - speaking.stopped
-        - playback.started
-        - playback.finished
-        - playback.error
-        - tts.started
-        - tts.finished
-        - tts.error
-        - recording.started
-        - recording.finished
-        - room.created
-        - room.deleted
-        - stt.text
-        - agent.connected
-        - agent.disconnected
-        - agent.user_transcript
-        - agent.agent_response
-
-  # ── Webhook event callbacks ─────────────────────────────────────────
-  # Describes the webhook delivery format using OpenAPI callbacks syntax
-  x-webhooks:
+            enum:
+                - leg.ringing
+                - leg.early_media
+                - leg.connected
+                - leg.disconnected
+                - leg.joined_room
+                - leg.left_room
+                - leg.muted
+                - leg.unmuted
+                - leg.hold
+                - leg.unhold
+                - dtmf.received
+                - speaking.started
+                - speaking.stopped
+                - playback.started
+                - playback.finished
+                - playback.error
+                - tts.started
+                - tts.finished
+                - tts.error
+                - recording.started
+                - recording.finished
+                - room.created
+                - room.deleted
+                - stt.text
+                - agent.connected
+                - agent.disconnected
+                - agent.user_transcript
+                - agent.agent_response
+        ICECandidateInit:
+            type: object
+            properties:
+                candidate:
+                    type: string
+                    description: ICE candidate string
+                sdpMid:
+                    type: string
+                    description: Media stream identification tag
+                sdpMLineIndex:
+                    type: integer
+                    description: Index of the media description
+            required:
+                - candidate
+x-webhooks:
     leg.ringing:
-      post:
-        summary: SIP call ringing (inbound or outbound)
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          from: { type: string, description: 'Caller URI (inbound) or From header value (outbound, if set)' }
-                          to: { type: string, description: 'Callee URI (inbound only)' }
-                          uri: { type: string, description: 'Dialed SIP URI (outbound only)' }
-                          sip_headers:
-                            type: object
-                            additionalProperties: { type: string }
-                            description: 'X-* custom SIP headers, if present'
+        post:
+            summary: SIP call ringing (inbound or outbound)
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    leg_type:
+                                        type: string
+                                        description: Leg type (e.g. sip_inbound, sip_outbound)
+                                    uri:
+                                        type: string
+                                        description: Dialed SIP URI (outbound only)
+                                    from:
+                                        type: string
+                                        description: Caller URI (inbound) or From header value (outbound, if set)
+                                    to:
+                                        type: string
+                                        description: Callee URI (inbound only)
+                                    sip_headers:
+                                        type: object
+                                        additionalProperties:
+                                            type: string
+                                        description: X-* custom SIP headers, if present
     leg.early_media:
-      post:
-        summary: Outbound leg received 183 Session Progress with SDP; media pipeline active
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          type: { type: string, description: 'Leg type (e.g. sip_outbound)' }
+        post:
+            summary: Outbound leg received 183 Session Progress with SDP; media pipeline active
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    leg_type:
+                                        type: string
+                                        description: Leg type (e.g. sip_outbound)
     leg.connected:
-      post:
-        summary: Leg answered/connected
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
+        post:
+            summary: Leg answered/connected
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    leg_type:
+                                        type: string
+                                        description: Leg type (e.g. sip_inbound, sip_outbound, webrtc)
     leg.disconnected:
-      post:
-        summary: Leg hung up
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          reason:
-                            type: string
-                            description: 'Disconnect reason. Common SIP failures are mapped to named reasons; unmapped 4xx/5xx/6xx codes appear as sip_{code}.'
-                            enum: [api_hangup, remote_bye, caller_cancel, ring_timeout, max_duration, busy, unavailable, not_found, forbidden, unauthorized, timeout, cancelled, not_acceptable, service_unavailable, declined, rtp_timeout, session_expired, invite_failed, connect_failed, ice_failure]
-                          duration_total:
-                            type: number
-                            description: Seconds from leg creation to disconnect
-                          duration_answered:
-                            type: number
-                            description: Seconds from answer to disconnect (0 if never answered)
+        post:
+            summary: Leg hung up (CDR-style nested structure)
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    disposition:
+                                        type: object
+                                        properties:
+                                            reason:
+                                                type: string
+                                                description: Disconnect reason. Common SIP failures are mapped to named reasons; unmapped 4xx/5xx/6xx codes appear as sip_{code}.
+                                                enum:
+                                                    - api_hangup
+                                                    - remote_bye
+                                                    - caller_cancel
+                                                    - ring_timeout
+                                                    - max_duration
+                                                    - busy
+                                                    - unavailable
+                                                    - not_found
+                                                    - forbidden
+                                                    - unauthorized
+                                                    - timeout
+                                                    - cancelled
+                                                    - not_acceptable
+                                                    - service_unavailable
+                                                    - declined
+                                                    - rtp_timeout
+                                                    - session_expired
+                                                    - invite_failed
+                                                    - connect_failed
+                                                    - ice_failure
+                                        required:
+                                            - reason
+                                    timing:
+                                        type: object
+                                        properties:
+                                            duration_total:
+                                                type: number
+                                                description: Seconds from leg creation to disconnect
+                                            duration_answered:
+                                                type: number
+                                                description: Seconds from answer to disconnect (0 if never answered)
+                                        required:
+                                            - duration_total
+                                            - duration_answered
+                                    quality:
+                                        description: RTP quality metrics. Omitted for WebRTC legs or unanswered legs with no media.
+                                        type: object
+                                        nullable: true
+                                        properties:
+                                            mos_score:
+                                                type: number
+                                                description: Mean Opinion Score (1.0–5.0) estimated via simplified E-model (ITU-T G.107) from packet loss and jitter
+                                            rtp_packets_received:
+                                                type: integer
+                                                description: Total inbound RTP audio packets received
+                                            rtp_packets_lost:
+                                                type: integer
+                                                description: Estimated lost packets based on sequence number gaps
+                                            rtp_jitter_ms:
+                                                type: number
+                                                description: Inter-arrival jitter in milliseconds (RFC 3550 §A.8)
+                                        required:
+                                            - mos_score
+                                            - rtp_packets_received
+                                            - rtp_packets_lost
+                                            - rtp_jitter_ms
     leg.joined_room:
-      post:
-        summary: Leg added to a room
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
+        post:
+            summary: Leg added to a room
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     leg.left_room:
-      post:
-        summary: Leg removed from a room
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
+        post:
+            summary: Leg removed from a room
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     leg.muted:
-      post:
-        summary: Leg muted
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
+        post:
+            summary: Leg muted
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
     leg.unmuted:
-      post:
-        summary: Leg unmuted
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
+        post:
+            summary: Leg unmuted
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
     leg.hold:
-      post:
-        summary: Leg put on hold (local or remote)
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          type: { type: string, description: 'Hold direction: "local" (we put them on hold) or "remote" (they put us on hold)' }
+        post:
+            summary: Leg put on hold (local or remote)
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    leg_type:
+                                        type: string
+                                        description: 'Hold direction: "local" (we put them on hold) or "remote" (they put us on hold)'
     leg.unhold:
-      post:
-        summary: Leg taken off hold (local or remote)
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          type: { type: string, description: 'Hold direction: "local" or "remote"' }
+        post:
+            summary: Leg taken off hold (local or remote)
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    leg_type:
+                                        type: string
+                                        description: 'Hold direction: "local" or "remote"'
     dtmf.received:
-      post:
-        summary: DTMF digit received
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          digit: { type: string }
+        post:
+            summary: DTMF digit received
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    digit:
+                                        type: string
+                                        description: DTMF digit received
     speaking.started:
-      post:
-        summary: Participant started speaking
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
+        post:
+            summary: Participant started speaking
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     speaking.stopped:
-      post:
-        summary: Participant stopped speaking
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
+        post:
+            summary: Participant stopped speaking
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     playback.started:
-      post:
-        summary: Playback began
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          playback_id: { type: string }
+        post:
+            summary: Playback began
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    playback_id:
+                                        type: string
+                                        description: Playback identifier
     playback.finished:
-      post:
-        summary: Playback ended
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          playback_id: { type: string }
+        post:
+            summary: Playback ended
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    playback_id:
+                                        type: string
+                                        description: Playback identifier
     playback.error:
-      post:
-        summary: Playback failed
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          playback_id: { type: string }
-                          error: { type: string }
+        post:
+            summary: Playback failed
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    playback_id:
+                                        type: string
+                                        description: Playback identifier
+                                    error:
+                                        type: string
+                                        description: Error message
     tts.started:
-      post:
-        summary: TTS synthesis began playing
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          tts_id: { type: string }
+        post:
+            summary: TTS synthesis began playing
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    tts_id:
+                                        type: string
+                                        description: TTS playback identifier
     tts.finished:
-      post:
-        summary: TTS synthesis finished playing
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          tts_id: { type: string }
+        post:
+            summary: TTS synthesis finished playing
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    tts_id:
+                                        type: string
+                                        description: TTS playback identifier
     tts.error:
-      post:
-        summary: TTS synthesis or playback failed
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          tts_id: { type: string }
-                          error: { type: string }
+        post:
+            summary: TTS synthesis or playback failed
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    tts_id:
+                                        type: string
+                                        description: TTS playback identifier
+                                    error:
+                                        type: string
+                                        description: Error message
     recording.started:
-      post:
-        summary: Recording began
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          file: { type: string }
+        post:
+            summary: Recording began
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    file:
+                                        type: string
+                                        description: Recording file path or S3 URI
     recording.finished:
-      post:
-        summary: Recording ended
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          file: { type: string }
+        post:
+            summary: Recording ended
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    file:
+                                        type: string
+                                        description: Recording file path or S3 URI
     room.created:
-      post:
-        summary: Room created
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          room_id: { type: string }
+        post:
+            summary: Room created
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     room.deleted:
-      post:
-        summary: Room deleted
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          room_id: { type: string }
+        post:
+            summary: Room deleted
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     stt.text:
-      post:
-        summary: Speech-to-text transcript
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          text: { type: string }
-                          is_final: { type: boolean }
+        post:
+            summary: Speech-to-text transcript
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    text:
+                                        type: string
+                                        description: Transcribed text
+                                    is_final:
+                                        type: boolean
+                                        description: Whether this is a final or partial transcript
     agent.connected:
-      post:
-        summary: Agent connected to provider
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          conversation_id: { type: string }
+        post:
+            summary: Agent connected to provider
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    conversation_id:
+                                        type: string
+                                        description: Provider-assigned conversation identifier
     agent.disconnected:
-      post:
-        summary: Agent session ended
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
+        post:
+            summary: Agent session ended
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
     agent.user_transcript:
-      post:
-        summary: User speech transcribed by agent
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          text: { type: string }
+        post:
+            summary: User speech transcribed by agent
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    text:
+                                        type: string
+                                        description: User speech text
     agent.agent_response:
-      post:
-        summary: Agent generated a response
-        requestBody:
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/WebhookEvent'
-                  - properties:
-                      data:
-                        type: object
-                        properties:
-                          leg_id: { type: string }
-                          room_id: { type: string }
-                          text: { type: string }
+        post:
+            summary: Agent generated a response
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            allOf:
+                                - $ref: '#/components/schemas/WebhookEvent'
+                                - properties:
+                                    leg_id:
+                                        type: string
+                                        description: Leg identifier
+                                    room_id:
+                                        type: string
+                                        description: Room identifier
+                                    text:
+                                        type: string
+                                        description: Agent response text

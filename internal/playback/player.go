@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,46 +157,41 @@ func (p *Player) playAt(ctx context.Context, writer io.Writer, url string, mimeT
 		repeat = 1
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Download the file to a temp file first. This avoids:
+	// - HTTP timeouts killing long-running streams
+	// - Re-fetching the URL on every loop iteration
+	dl, err := p.downloadToTemp(ctx, url, mimeType)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(dl.file.Name())
+	defer dl.file.Close()
 
 	for iteration := 0; repeat < 0 || iteration < repeat; iteration++ {
-		// Check for cancellation before each iteration.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
+		// Seek back to beginning for each iteration.
+		if _, err := dl.file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("seek temp file: %w", err)
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("fetch audio: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return fmt.Errorf("fetch audio: status %d", resp.StatusCode)
-		}
-
-		format := detectFormat(url, mimeType, resp.Body)
 		if iteration == 0 && p.onStart != nil {
 			p.onStart()
 		}
 
 		var streamErr error
-		switch format.kind {
+		switch dl.format {
 		case formatRawPCM:
-			streamErr = p.streamRawPCM(ctx, format.reader, writer, format.sampleRate, targetRate)
+			streamErr = p.streamRawPCM(ctx, dl.file, writer, dl.sampleRate, targetRate)
 		case formatMP3:
-			streamErr = p.streamMP3(ctx, format.reader, writer, targetRate)
+			streamErr = p.streamMP3(ctx, dl.file, writer, targetRate)
 		default:
-			streamErr = p.streamWAV(ctx, format.reader, writer, targetRate)
+			streamErr = p.streamWAV(ctx, dl.file, writer, targetRate)
 		}
-		resp.Body.Close()
 
 		if streamErr != nil {
 			return streamErr
@@ -203,6 +199,65 @@ func (p *Player) playAt(ctx context.Context, writer io.Writer, url string, mimeT
 	}
 
 	return nil
+}
+
+type downloadResult struct {
+	file       *os.File
+	format     audioFormat
+	sampleRate uint32 // only set for formatRawPCM
+}
+
+// downloadToTemp fetches url into a temp file and returns the file and detected format.
+func (p *Player) downloadToTemp(ctx context.Context, url, mimeType string) (downloadResult, error) {
+	client := &http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return downloadResult{}, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return downloadResult{}, fmt.Errorf("fetch audio: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return downloadResult{}, fmt.Errorf("fetch audio: status %d", resp.StatusCode)
+	}
+
+	tmpFile, err := os.CreateTemp("", "vb-playback-*")
+	if err != nil {
+		return downloadResult{}, fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return downloadResult{}, fmt.Errorf("download audio: %w", err)
+	}
+
+	// Seek to start so detectFormat can read the header.
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return downloadResult{}, fmt.Errorf("seek temp file: %w", err)
+	}
+
+	det := detectFormat(url, mimeType, tmpFile)
+
+	// Seek to start again for the actual playback.
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return downloadResult{}, fmt.Errorf("seek temp file: %w", err)
+	}
+
+	return downloadResult{file: tmpFile, format: det.kind, sampleRate: det.sampleRate}, nil
 }
 
 func (p *Player) Stop() {

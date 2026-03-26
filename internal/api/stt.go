@@ -31,16 +31,10 @@ var (
 	}{m: make(map[string]*roomSTTState)}
 )
 
-type sttRequest struct {
-	Language string `json:"language"`
-	Partial  bool   `json:"partial"`
-	APIKey   string `json:"api_key,omitempty"`
-}
-
 func (s *Server) sttLeg(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	var req sttRequest
+	var req STTRequest
 	// Body is optional; ignore decode errors for empty body.
 	_ = decodeJSON(r, &req)
 
@@ -109,12 +103,11 @@ func (s *Server) sttLeg(w http.ResponseWriter, r *http.Request) {
 	bus := s.Bus
 	cb := func(text string, isFinal bool) {
 		s.Log.Info("stt callback fired", "leg_id", id, "text", text, "is_final", isFinal)
-		data := map[string]interface{}{
-			"leg_id":   id,
-			"text":     text,
-			"is_final": isFinal,
-		}
-		bus.Publish(events.STTText, data)
+		bus.Publish(events.STTText, &events.STTTextData{
+			LegRoomScope: events.LegRoomScope{LegID: id},
+			Text:         text,
+			IsFinal:      isFinal,
+		})
 	}
 
 	opts := stt.Options{Language: req.Language, Partial: req.Partial}
@@ -170,7 +163,7 @@ func (s *Server) stopSTTLeg(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sttRoom(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	var req sttRequest
+	var req STTRequest
 	_ = decodeJSON(r, &req)
 
 	apiKey := req.APIKey
@@ -241,13 +234,11 @@ func (s *Server) startRoomLegSTT(roomID, legID string, l leg.Leg, mix *mixer.Mix
 	apiKey := state.apiKey
 
 	cb := func(text string, isFinal bool) {
-		data := map[string]interface{}{
-			"leg_id":   legID,
-			"room_id":  roomID,
-			"text":     text,
-			"is_final": isFinal,
-		}
-		bus.Publish(events.STTText, data)
+		bus.Publish(events.STTText, &events.STTTextData{
+			LegRoomScope: events.LegRoomScope{LegID: legID, RoomID: roomID},
+			Text:         text,
+			IsFinal:      isFinal,
+		})
 	}
 
 	go func() {

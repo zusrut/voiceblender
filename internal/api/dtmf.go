@@ -14,9 +14,7 @@ func (s *Server) sendDTMF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Digits string `json:"digits"`
-	}
+	var req DTMFRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return

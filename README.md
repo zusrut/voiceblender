@@ -16,7 +16,7 @@ A Go service that bridges SIP and WebRTC voice calls with multi-party audio mixi
 - **TTS** -- text-to-speech into legs or rooms (ElevenLabs, Google Cloud, AWS Polly)
 - **STT** -- real-time speech-to-text with partial transcripts (ElevenLabs)
 - **AI Agent** -- attach a conversational AI agent to a leg or room (ElevenLabs, VAPI, Pipecat)
-- **Webhooks** -- real-time event delivery with HMAC-SHA256 signing and retry
+- **Webhooks** -- real-time event delivery with HMAC-SHA256 signing and retry; typed event data with CDR-style `leg.disconnected` (disposition, timing, quality)
 - **Prometheus metrics** -- operational metrics exposed at `GET /metrics` (active legs/rooms, call durations, disconnect reasons, Go runtime). See [API.md](API.md) for the full metric reference. Profiling via `go tool pprof` is available at `/debug/pprof/` when built with `-tags pprof`.
 
 ## Quick Start
@@ -190,6 +190,10 @@ See [TESTING.md](TESTING.md) for details.
 - [zaf/g711](https://github.com/zaf/g711) -- G.711 codec
 - [gobwas/ws](https://github.com/gobwas/ws) -- WebSocket
 - [go-audio/wav](https://github.com/go-audio/wav) -- WAV encoding
+
+## AI-Assisted Development
+
+This project was developed with the assistance of [Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant. 
 
 ## License
 

@@ -17,16 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type recordRequest struct {
-	Storage     string `json:"storage"`
-	S3Bucket    string `json:"s3_bucket"`
-	S3Region    string `json:"s3_region"`
-	S3Endpoint  string `json:"s3_endpoint"`
-	S3Prefix    string `json:"s3_prefix"`
-	S3AccessKey string `json:"s3_access_key"`
-	S3SecretKey string `json:"s3_secret_key"`
-}
-
 // legRecordInfo tracks state needed to cleanly stop a stereo leg recording.
 type legRecordInfo struct {
 	roomID  string
@@ -69,7 +59,7 @@ var (
 // resolveStorage returns the appropriate storage backend for the request.
 // If the request includes per-request S3 config (s3_bucket), a new S3Backend
 // is created on the fly. Otherwise, falls back to the server-level S3 backend.
-func (s *Server) resolveStorage(req recordRequest) (storage.Backend, error) {
+func (s *Server) resolveStorage(req RecordRequest) (storage.Backend, error) {
 	switch req.Storage {
 	case "", "file":
 		return storage.FileBackend{}, nil
@@ -110,7 +100,7 @@ func (s *Server) recordLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req recordRequest
+	var req RecordRequest
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req) // ignore error; empty body is fine
 	}
@@ -203,7 +193,10 @@ func (s *Server) recordLeg(w http.ResponseWriter, r *http.Request) {
 	legRecorders.m[id] = rec
 	legRecorders.Unlock()
 
-	s.Bus.Publish(events.RecordingStarted, map[string]interface{}{"leg_id": id, "file": fpath})
+	s.Bus.Publish(events.RecordingStarted, &events.RecordingStartedData{
+		LegRoomScope: events.LegRoomScope{LegID: id},
+		File:         fpath,
+	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "recording", "file": fpath})
 }
 
@@ -271,7 +264,10 @@ func (s *Server) stopLegRecording(legID string) (string, bool) {
 		}
 	}
 
-	s.Bus.Publish(events.RecordingFinished, map[string]interface{}{"leg_id": legID, "file": location})
+	s.Bus.Publish(events.RecordingFinished, &events.RecordingFinishedData{
+		LegRoomScope: events.LegRoomScope{LegID: legID},
+		File:         location,
+	})
 	return location, true
 }
 
@@ -293,7 +289,7 @@ func (s *Server) recordRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req recordRequest
+	var req RecordRequest
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
 	}
@@ -334,7 +330,10 @@ func (s *Server) recordRoom(w http.ResponseWriter, r *http.Request) {
 	roomRecordStorage.m[id] = backend
 	roomRecordStorage.Unlock()
 
-	s.Bus.Publish(events.RecordingStarted, map[string]interface{}{"room_id": id, "file": fpath})
+	s.Bus.Publish(events.RecordingStarted, &events.RecordingStartedData{
+		LegRoomScope: events.LegRoomScope{RoomID: id},
+		File:         fpath,
+	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "recording", "file": fpath})
 }
 
@@ -382,7 +381,10 @@ func (s *Server) stopRecordRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.Bus.Publish(events.RecordingFinished, map[string]interface{}{"room_id": id, "file": location})
+	s.Bus.Publish(events.RecordingFinished, &events.RecordingFinishedData{
+		LegRoomScope: events.LegRoomScope{RoomID: id},
+		File:         location,
+	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "stopped", "file": location})
 }
 

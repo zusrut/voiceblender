@@ -40,13 +40,7 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		URL      string `json:"url"`
-		Tone     string `json:"tone"`
-		MimeType string `json:"mime_type"`
-		Repeat   int    `json:"repeat"`
-		Volume   int    `json:"volume"`
-	}
+	var req PlaybackRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -96,16 +90,20 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 	playRate := uint32(mixer.SampleRate) // always play at mixer rate
 
 	player.OnStart(func() {
-		s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
+		s.Bus.Publish(events.PlaybackStarted, &events.PlaybackStartedData{
+			LegRoomScope: events.LegRoomScope{LegID: id},
+			PlaybackID:   playbackID,
+		})
 	})
 	go func() {
 		var err error
 		if req.Tone != "" {
 			spec, ok := playback.LookupTone(req.Tone)
 			if !ok {
-				s.Bus.Publish(events.PlaybackError, map[string]interface{}{
-					"leg_id": id, "playback_id": playbackID,
-					"error": fmt.Sprintf("unknown tone %q, available: %s", req.Tone, strings.Join(playback.ToneNames(), ", ")),
+				s.Bus.Publish(events.PlaybackError, &events.PlaybackErrorData{
+					LegRoomScope: events.LegRoomScope{LegID: id},
+					PlaybackID:   playbackID,
+					Error:        fmt.Sprintf("unknown tone %q, available: %s", req.Tone, strings.Join(playback.ToneNames(), ", ")),
 				})
 				return
 			}
@@ -121,9 +119,16 @@ func (s *Server) playLeg(w http.ResponseWriter, r *http.Request) {
 		}
 		legPlayers.Unlock()
 		if err != nil && err != context.Canceled {
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"leg_id": id, "playback_id": playbackID, "error": err.Error()})
+			s.Bus.Publish(events.PlaybackError, &events.PlaybackErrorData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				PlaybackID:   playbackID,
+				Error:        err.Error(),
+			})
 		} else {
-			s.Bus.Publish(events.PlaybackFinished, map[string]interface{}{"leg_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.PlaybackFinished, &events.PlaybackFinishedData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				PlaybackID:   playbackID,
+			})
 		}
 	}()
 
@@ -158,13 +163,7 @@ func (s *Server) playRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		URL      string `json:"url"`
-		Tone     string `json:"tone"`
-		MimeType string `json:"mime_type"`
-		Repeat   int    `json:"repeat"`
-		Volume   int    `json:"volume"`
-	}
+	var req PlaybackRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -204,7 +203,10 @@ func (s *Server) playRoom(w http.ResponseWriter, r *http.Request) {
 	roomPlayers.Unlock()
 
 	player.OnStart(func() {
-		s.Bus.Publish(events.PlaybackStarted, map[string]interface{}{"room_id": id, "playback_id": playbackID})
+		s.Bus.Publish(events.PlaybackStarted, &events.PlaybackStartedData{
+			LegRoomScope: events.LegRoomScope{RoomID: id},
+			PlaybackID:   playbackID,
+		})
 	})
 
 	go func() {
@@ -214,9 +216,10 @@ func (s *Server) playRoom(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				pw.Close()
 				rm.Mixer().RemoveParticipant(playbackID)
-				s.Bus.Publish(events.PlaybackError, map[string]interface{}{
-					"room_id": id, "playback_id": playbackID,
-					"error": fmt.Sprintf("unknown tone %q, available: %s", req.Tone, strings.Join(playback.ToneNames(), ", ")),
+				s.Bus.Publish(events.PlaybackError, &events.PlaybackErrorData{
+					LegRoomScope: events.LegRoomScope{RoomID: id},
+					PlaybackID:   playbackID,
+					Error:        fmt.Sprintf("unknown tone %q, available: %s", req.Tone, strings.Join(playback.ToneNames(), ", ")),
 				})
 				return
 			}
@@ -236,9 +239,16 @@ func (s *Server) playRoom(w http.ResponseWriter, r *http.Request) {
 		roomPlayers.Unlock()
 		if err != nil && err != context.Canceled {
 			s.Log.Debug("room playback error", "room_id", id, "error", err)
-			s.Bus.Publish(events.PlaybackError, map[string]interface{}{"room_id": id, "playback_id": playbackID, "error": err.Error()})
+			s.Bus.Publish(events.PlaybackError, &events.PlaybackErrorData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				PlaybackID:   playbackID,
+				Error:        err.Error(),
+			})
 		} else {
-			s.Bus.Publish(events.PlaybackFinished, map[string]interface{}{"room_id": id, "playback_id": playbackID})
+			s.Bus.Publish(events.PlaybackFinished, &events.PlaybackFinishedData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				PlaybackID:   playbackID,
+			})
 		}
 	}()
 
@@ -268,9 +278,7 @@ func (s *Server) stopPlayRoom(w http.ResponseWriter, r *http.Request) {
 func (s *Server) volumePlayLeg(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	playbackID := chi.URLParam(r, "playbackID")
-	var req struct {
-		Volume int `json:"volume"`
-	}
+	var req VolumeRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -293,9 +301,7 @@ func (s *Server) volumePlayLeg(w http.ResponseWriter, r *http.Request) {
 func (s *Server) volumePlayRoom(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	playbackID := chi.URLParam(r, "playbackID")
-	var req struct {
-		Volume int `json:"volume"`
-	}
+	var req VolumeRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return

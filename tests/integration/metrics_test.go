@@ -52,7 +52,7 @@ func newTestInstanceWithMetrics(t *testing.T, name string) *testInstance {
 	}
 
 	bus := events.NewBus("test")
-	webhooks := events.NewWebhookRegistry(bus, log)
+	webhooks := events.NewWebhookRegistry(bus, log, "", "")
 	legMgr := leg.NewManager()
 	roomMgr := room.NewManager(legMgr, bus, log)
 
@@ -258,10 +258,10 @@ func TestMetrics_ActiveLegs(t *testing.T) {
 
 	// Wait for both disconnect events.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outID
+		return e.Data.GetLegID() == outID
 	}, 5*time.Second)
 	instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inID
+		return e.Data.GetLegID() == inID
 	}, 5*time.Second)
 
 	// Give the metrics collector a moment to process the disconnect events.
@@ -301,10 +301,10 @@ func TestMetrics_CallDuration(t *testing.T) {
 
 	// Wait for disconnect events on both sides before checking metrics.
 	instA.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == outID
+		return e.Data.GetLegID() == outID
 	}, 5*time.Second)
 	instB.collector.waitForMatch(t, events.LegDisconnected, func(e events.Event) bool {
-		return e.Data["leg_id"] == inID
+		return e.Data.GetLegID() == inID
 	}, 5*time.Second)
 
 	// Give the metrics collector time to process the events.

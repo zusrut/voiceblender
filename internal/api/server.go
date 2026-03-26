@@ -1,3 +1,5 @@
+//go:generate go run ../../cmd/openapi-gen
+
 package api
 
 import (
@@ -135,10 +137,6 @@ func (s *Server) routes() {
 		// WebRTC
 		r.Post("/webrtc/offer", s.webrtcOffer)
 
-		// Webhooks
-		r.Post("/webhooks", s.registerWebhook)
-		r.Get("/webhooks", s.listWebhooks)
-		r.Delete("/webhooks/{id}", s.deleteWebhook)
 	})
 }
 

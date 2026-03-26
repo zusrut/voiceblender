@@ -107,19 +107,10 @@ var (
 	}{m: make(map[string]*agentInfo)}
 )
 
-type agentRequest struct {
-	AgentID          string            `json:"agent_id"`
-	Provider         string            `json:"provider,omitempty"`
-	FirstMessage     string            `json:"first_message,omitempty"`
-	Language         string            `json:"language,omitempty"`
-	DynamicVariables map[string]string `json:"dynamic_variables,omitempty"`
-	APIKey           string            `json:"api_key,omitempty"`
-}
-
 func (s *Server) agentLeg(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	var req agentRequest
+	var req AgentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -250,26 +241,26 @@ func (s *Server) agentLeg(w http.ResponseWriter, r *http.Request) {
 
 	cb := agent.Callbacks{
 		OnConnected: func(conversationID string) {
-			bus.Publish(events.AgentConnected, map[string]interface{}{
-				"leg_id":          id,
-				"conversation_id": conversationID,
+			bus.Publish(events.AgentConnected, &events.AgentConnectedData{
+				LegRoomScope:   events.LegRoomScope{LegID: id},
+				ConversationID: conversationID,
 			})
 		},
 		OnDisconnected: func() {
-			bus.Publish(events.AgentDisconnected, map[string]interface{}{
-				"leg_id": id,
+			bus.Publish(events.AgentDisconnected, &events.AgentDisconnectedData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
 			})
 		},
 		OnUserTranscript: func(text string) {
-			bus.Publish(events.AgentUserTranscript, map[string]interface{}{
-				"leg_id": id,
-				"text":   text,
+			bus.Publish(events.AgentUserTranscript, &events.AgentTranscriptData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				Text:         text,
 			})
 		},
 		OnAgentResponse: func(text string) {
-			bus.Publish(events.AgentAgentResponse, map[string]interface{}{
-				"leg_id": id,
-				"text":   text,
+			bus.Publish(events.AgentAgentResponse, &events.AgentResponseData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				Text:         text,
 			})
 		},
 	}
@@ -339,7 +330,7 @@ func (s *Server) cleanupLegAgent(legID string) {
 func (s *Server) agentRoom(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	var req agentRequest
+	var req AgentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -426,26 +417,26 @@ func (s *Server) agentRoom(w http.ResponseWriter, r *http.Request) {
 	bus := s.Bus
 	cb := agent.Callbacks{
 		OnConnected: func(conversationID string) {
-			bus.Publish(events.AgentConnected, map[string]interface{}{
-				"room_id":         id,
-				"conversation_id": conversationID,
+			bus.Publish(events.AgentConnected, &events.AgentConnectedData{
+				LegRoomScope:   events.LegRoomScope{RoomID: id},
+				ConversationID: conversationID,
 			})
 		},
 		OnDisconnected: func() {
-			bus.Publish(events.AgentDisconnected, map[string]interface{}{
-				"room_id": id,
+			bus.Publish(events.AgentDisconnected, &events.AgentDisconnectedData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
 			})
 		},
 		OnUserTranscript: func(text string) {
-			bus.Publish(events.AgentUserTranscript, map[string]interface{}{
-				"room_id": id,
-				"text":    text,
+			bus.Publish(events.AgentUserTranscript, &events.AgentTranscriptData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				Text:         text,
 			})
 		},
 		OnAgentResponse: func(text string) {
-			bus.Publish(events.AgentAgentResponse, map[string]interface{}{
-				"room_id": id,
-				"text":    text,
+			bus.Publish(events.AgentAgentResponse, &events.AgentResponseData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				Text:         text,
 			})
 		},
 	}

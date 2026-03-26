@@ -10,9 +10,7 @@ import (
 )
 
 func (s *Server) webrtcOffer(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SDP string `json:"sdp"`
-	}
+	var req WebRTCOfferRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -63,9 +61,8 @@ func (s *Server) webrtcOffer(w http.ResponseWriter, r *http.Request) {
 	// Handle ICE connection state changes
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		if state == webrtc.ICEConnectionStateFailed || state == webrtc.ICEConnectionStateDisconnected {
-			s.LegMgr.Remove(l.ID())
-			s.Bus.Publish(events.LegDisconnected, disconnectData(l, "ice_failure"))
-			l.Hangup(r.Context())
+			s.cleanupLeg(l)
+			s.publishDisconnect(l, "ice_failure")
 		}
 	})
 
@@ -106,7 +103,10 @@ func (s *Server) webrtcOffer(w http.ResponseWriter, r *http.Request) {
 
 	// Register leg immediately — no waiting for ICE gathering
 	s.LegMgr.Add(l)
-	s.Bus.Publish(events.LegConnected, map[string]interface{}{"leg_id": l.ID(), "type": "webrtc"})
+	s.Bus.Publish(events.LegConnected, &events.LegConnectedData{
+		LegScope: events.LegScope{LegID: l.ID()},
+		LegType:  "webrtc",
+	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"leg_id": l.ID(),

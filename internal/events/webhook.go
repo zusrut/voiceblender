@@ -12,8 +12,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type Webhook struct {
@@ -23,16 +21,16 @@ type Webhook struct {
 }
 
 type WebhookRegistry struct {
-	mu           sync.RWMutex
-	hooks        map[string]*Webhook // global webhooks
-	legWebhooks  map[string]*Webhook // leg_id → Webhook
-	roomWebhooks map[string]*Webhook // room_id → Webhook
-	bus          *Bus
-	log          *slog.Logger
-	client       *http.Client
-	workCh       chan deliveryJob
-	stopOnce     sync.Once
-	stopCh       chan struct{}
+	mu             sync.RWMutex
+	globalWebhook  *Webhook // from WEBHOOK_URL + WEBHOOK_SECRET env vars
+	legWebhooks    map[string]*Webhook // leg_id → Webhook
+	roomWebhooks   map[string]*Webhook // room_id → Webhook
+	bus            *Bus
+	log            *slog.Logger
+	client         *http.Client
+	workCh         chan deliveryJob
+	stopOnce       sync.Once
+	stopCh         chan struct{}
 }
 
 type deliveryJob struct {
@@ -40,16 +38,21 @@ type deliveryJob struct {
 	event Event
 }
 
-func NewWebhookRegistry(bus *Bus, log *slog.Logger) *WebhookRegistry {
+func NewWebhookRegistry(bus *Bus, log *slog.Logger, globalURL, globalSecret string) *WebhookRegistry {
+	var global *Webhook
+	if globalURL != "" {
+		global = &Webhook{ID: "global", URL: globalURL, Secret: globalSecret}
+	}
+
 	r := &WebhookRegistry{
-		hooks:        make(map[string]*Webhook),
-		legWebhooks:  make(map[string]*Webhook),
-		roomWebhooks: make(map[string]*Webhook),
-		bus:          bus,
-		log:    log,
-		client: &http.Client{Timeout: 10 * time.Second},
-		workCh: make(chan deliveryJob, 1000),
-		stopCh: make(chan struct{}),
+		globalWebhook: global,
+		legWebhooks:   make(map[string]*Webhook),
+		roomWebhooks:  make(map[string]*Webhook),
+		bus:           bus,
+		log:           log,
+		client:        &http.Client{Timeout: 10 * time.Second},
+		workCh:        make(chan deliveryJob, 1000),
+		stopCh:        make(chan struct{}),
 	}
 	bus.Subscribe(r.dispatch)
 	for i := 0; i < 10; i++ {
@@ -60,18 +63,6 @@ func NewWebhookRegistry(bus *Bus, log *slog.Logger) *WebhookRegistry {
 
 func (r *WebhookRegistry) Stop() {
 	r.stopOnce.Do(func() { close(r.stopCh) })
-}
-
-func (r *WebhookRegistry) Register(url, secret string) *Webhook {
-	w := &Webhook{
-		ID:     uuid.New().String(),
-		URL:    url,
-		Secret: secret,
-	}
-	r.mu.Lock()
-	r.hooks[w.ID] = w
-	r.mu.Unlock()
-	return w
 }
 
 func (r *WebhookRegistry) SetLegWebhook(legID, url, secret string) {
@@ -98,26 +89,6 @@ func (r *WebhookRegistry) ClearRoomWebhook(roomID string) {
 	r.mu.Unlock()
 }
 
-func (r *WebhookRegistry) Unregister(id string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.hooks[id]; ok {
-		delete(r.hooks, id)
-		return true
-	}
-	return false
-}
-
-func (r *WebhookRegistry) List() []*Webhook {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]*Webhook, 0, len(r.hooks))
-	for _, w := range r.hooks {
-		out = append(out, w)
-	}
-	return out
-}
-
 func (r *WebhookRegistry) enqueue(w *Webhook, e Event) {
 	select {
 	case r.workCh <- deliveryJob{hook: w, event: e}:
@@ -128,8 +99,8 @@ func (r *WebhookRegistry) enqueue(w *Webhook, e Event) {
 }
 
 func (r *WebhookRegistry) dispatch(e Event) {
-	legID, _ := e.Data["leg_id"].(string)
-	roomID, _ := e.Data["room_id"].(string)
+	legID := e.Data.GetLegID()
+	roomID := e.Data.GetRoomID()
 
 	r.mu.RLock()
 	var target *Webhook
@@ -139,21 +110,13 @@ func (r *WebhookRegistry) dispatch(e Event) {
 	if target == nil && roomID != "" {
 		target = r.roomWebhooks[roomID]
 	}
-	var globalHooks []*Webhook
 	if target == nil {
-		globalHooks = make([]*Webhook, 0, len(r.hooks))
-		for _, w := range r.hooks {
-			globalHooks = append(globalHooks, w)
-		}
+		target = r.globalWebhook
 	}
 	r.mu.RUnlock()
 
 	if target != nil {
 		r.enqueue(target, e)
-		return
-	}
-	for _, w := range globalHooks {
-		r.enqueue(w, e)
 	}
 }
 

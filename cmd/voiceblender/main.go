@@ -46,7 +46,7 @@ func main() {
 	bus.Subscribe(func(e events.Event) {
 		log.Info("event", "type", string(e.Type), "data", e.Data)
 	})
-	webhookReg := events.NewWebhookRegistry(bus, log)
+	webhookReg := events.NewWebhookRegistry(bus, log, cfg.WebhookURL, cfg.WebhookSecret)
 	defer webhookReg.Stop()
 
 	// Leg and room managers

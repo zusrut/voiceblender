@@ -1,0 +1,618 @@
+package api
+
+// RouteMeta describes a single API endpoint for OpenAPI generation.
+type RouteMeta struct {
+	Method      string
+	Path        string
+	OperationID string
+	Summary     string
+	Description string
+	Tags        []string
+	RequestType interface{} // nil or Go type instance (e.g. CreateLegRequest{})
+	Responses   map[int]ResponseMeta
+}
+
+// ResponseMeta describes a single HTTP response for an endpoint.
+type ResponseMeta struct {
+	Description string
+	Type        interface{} // nil, or Go type instance
+}
+
+// WebhookFieldDescriptions maps "event_type.field_name" → description for
+// inline properties in x-webhooks entries.
+func WebhookFieldDescriptions() map[string]string {
+	return map[string]string{
+		// leg.ringing
+		"leg.ringing.leg_id":      "Leg identifier",
+		"leg.ringing.leg_type":    "Leg type (e.g. sip_inbound, sip_outbound)",
+		"leg.ringing.uri":         "Dialed SIP URI (outbound only)",
+		"leg.ringing.from":        "Caller URI (inbound) or From header value (outbound, if set)",
+		"leg.ringing.to":          "Callee URI (inbound only)",
+		"leg.ringing.sip_headers": "X-* custom SIP headers, if present",
+
+		// leg.early_media
+		"leg.early_media.leg_id":   "Leg identifier",
+		"leg.early_media.leg_type": "Leg type (e.g. sip_outbound)",
+
+		// leg.connected
+		"leg.connected.leg_id":   "Leg identifier",
+		"leg.connected.leg_type": "Leg type (e.g. sip_inbound, sip_outbound, webrtc)",
+
+		// leg.disconnected
+		"leg.disconnected.leg_id": "Leg identifier",
+
+		// leg.joined_room / left_room
+		"leg.joined_room.leg_id":  "Leg identifier",
+		"leg.joined_room.room_id": "Room identifier",
+		"leg.left_room.leg_id":    "Leg identifier",
+		"leg.left_room.room_id":   "Room identifier",
+
+		// leg.muted / unmuted
+		"leg.muted.leg_id":   "Leg identifier",
+		"leg.unmuted.leg_id": "Leg identifier",
+
+		// leg.hold / unhold
+		"leg.hold.leg_id":     "Leg identifier",
+		"leg.hold.leg_type":   `Hold direction: "local" (we put them on hold) or "remote" (they put us on hold)`,
+		"leg.unhold.leg_id":   "Leg identifier",
+		"leg.unhold.leg_type": `Hold direction: "local" or "remote"`,
+
+		// dtmf.received
+		"dtmf.received.leg_id": "Leg identifier",
+		"dtmf.received.digit":  "DTMF digit received",
+
+		// speaking
+		"speaking.started.leg_id":  "Leg identifier",
+		"speaking.started.room_id": "Room identifier",
+		"speaking.stopped.leg_id":  "Leg identifier",
+		"speaking.stopped.room_id": "Room identifier",
+
+		// playback
+		"playback.started.leg_id":       "Leg identifier",
+		"playback.started.room_id":      "Room identifier",
+		"playback.started.playback_id":  "Playback identifier",
+		"playback.finished.leg_id":      "Leg identifier",
+		"playback.finished.room_id":     "Room identifier",
+		"playback.finished.playback_id": "Playback identifier",
+		"playback.error.leg_id":         "Leg identifier",
+		"playback.error.room_id":        "Room identifier",
+		"playback.error.playback_id":    "Playback identifier",
+		"playback.error.error":          "Error message",
+
+		// tts
+		"tts.started.leg_id":  "Leg identifier",
+		"tts.started.room_id": "Room identifier",
+		"tts.started.tts_id":  "TTS playback identifier",
+		"tts.finished.leg_id":  "Leg identifier",
+		"tts.finished.room_id": "Room identifier",
+		"tts.finished.tts_id":  "TTS playback identifier",
+		"tts.error.leg_id":     "Leg identifier",
+		"tts.error.room_id":    "Room identifier",
+		"tts.error.tts_id":     "TTS playback identifier",
+		"tts.error.error":      "Error message",
+
+		// recording
+		"recording.started.leg_id":   "Leg identifier",
+		"recording.started.room_id":  "Room identifier",
+		"recording.started.file":     "Recording file path or S3 URI",
+		"recording.finished.leg_id":  "Leg identifier",
+		"recording.finished.room_id": "Room identifier",
+		"recording.finished.file":    "Recording file path or S3 URI",
+
+		// room
+		"room.created.room_id": "Room identifier",
+		"room.deleted.room_id": "Room identifier",
+
+		// stt
+		"stt.text.leg_id":   "Leg identifier",
+		"stt.text.room_id":  "Room identifier",
+		"stt.text.text":     "Transcribed text",
+		"stt.text.is_final": "Whether this is a final or partial transcript",
+
+		// agent
+		"agent.connected.leg_id":          "Leg identifier",
+		"agent.connected.room_id":         "Room identifier",
+		"agent.connected.conversation_id": "Provider-assigned conversation identifier",
+		"agent.disconnected.leg_id":       "Leg identifier",
+		"agent.disconnected.room_id":      "Room identifier",
+		"agent.user_transcript.leg_id":    "Leg identifier",
+		"agent.user_transcript.room_id":   "Room identifier",
+		"agent.user_transcript.text":      "User speech text",
+		"agent.agent_response.leg_id":     "Leg identifier",
+		"agent.agent_response.room_id":    "Room identifier",
+		"agent.agent_response.text":       "Agent response text",
+	}
+}
+
+// WebhookNestedFieldDescriptions provides descriptions for nested struct
+// fields in webhook events (e.g. disposition.reason, timing.duration_total).
+func WebhookNestedFieldDescriptions() map[string]string {
+	return map[string]string{
+		"DisconnectDisposition.reason":    "Disconnect reason. Common SIP failures are mapped to named reasons; unmapped 4xx/5xx/6xx codes appear as sip_{code}.",
+		"CallTiming.duration_total":       "Seconds from leg creation to disconnect",
+		"CallTiming.duration_answered":    "Seconds from answer to disconnect (0 if never answered)",
+		"CallQuality.mos_score":           "Mean Opinion Score (1.0–5.0) estimated via simplified E-model (ITU-T G.107) from packet loss and jitter",
+		"CallQuality.rtp_packets_received": "Total inbound RTP audio packets received",
+		"CallQuality.rtp_packets_lost":    "Estimated lost packets based on sequence number gaps",
+		"CallQuality.rtp_jitter_ms":       "Inter-arrival jitter in milliseconds (RFC 3550 §A.8)",
+	}
+}
+
+// DisconnectReasonEnum lists all possible disconnect reason values.
+var DisconnectReasonEnum = []string{
+	"api_hangup", "remote_bye", "caller_cancel", "ring_timeout", "max_duration",
+	"busy", "unavailable", "not_found", "forbidden", "unauthorized", "timeout",
+	"cancelled", "not_acceptable", "service_unavailable", "declined",
+	"rtp_timeout", "session_expired", "invite_failed", "connect_failed", "ice_failure",
+}
+
+// QualityDescription is the description for the quality object in leg.disconnected.
+const QualityDescription = "RTP quality metrics. Omitted for WebRTC legs or unanswered legs with no media."
+
+// RoutesMetadata returns the authoritative list of all API routes with their
+// OpenAPI metadata. Used by cmd/openapi-gen to produce openapi.yaml.
+func RoutesMetadata() []RouteMeta {
+	return []RouteMeta{
+		// ── Legs ────────────────────────────────────────────────────────
+		{
+			Method: "POST", Path: "/legs", OperationID: "createLeg",
+			Summary: "Originate an outbound SIP call",
+			Tags:    []string{"Legs"},
+			RequestType: CreateLegRequest{},
+			Responses: map[int]ResponseMeta{
+				201: {Description: "Leg created", Type: LegView{}},
+				400: {Description: "Invalid JSON, bad SIP URI, unknown codec, or unsupported type"},
+			},
+		},
+		{
+			Method: "GET", Path: "/legs", OperationID: "listLegs",
+			Summary: "List all active legs",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Array of legs", Type: []LegView{}},
+			},
+		},
+		{
+			Method: "GET", Path: "/legs/{id}", OperationID: "getLeg",
+			Summary: "Get a single leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg details", Type: LegView{}},
+				404: {Description: "Leg not found"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}", OperationID: "deleteLeg",
+			Summary: "Hang up a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg hung up"},
+				404: {Description: "Leg not found"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/answer", OperationID: "answerLeg",
+			Summary: "Answer a ringing or early-media inbound SIP leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Answer initiated"},
+				400: {Description: "Not a SIP inbound leg"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg is not in ringing or early_media state"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/early-media", OperationID: "earlyMediaLeg",
+			Summary: "Enable early media on a ringing inbound SIP leg",
+			Description: "Sends SIP 183 Session Progress with SDP and sets up the media pipeline. " +
+				"The leg transitions to `early_media` state, allowing audio playback and " +
+				"room participation before the call is answered.",
+			Tags: []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Early media enabled"},
+				400: {Description: "Not a SIP inbound leg"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg is not in ringing state"},
+				500: {Description: "Media setup failed"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/mute", OperationID: "muteLeg",
+			Summary: "Mute a leg",
+			Description: "A muted leg's audio is excluded from the room mix and speaking events " +
+				"are suppressed. Taps (recording/STT) still receive the muted leg's own audio.",
+			Tags: []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg muted"},
+				404: {Description: "Leg not found"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/mute", OperationID: "unmuteLeg",
+			Summary: "Unmute a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg unmuted"},
+				404: {Description: "Leg not found"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/hold", OperationID: "holdLeg",
+			Summary: "Put a SIP call on hold",
+			Description: "Sends a re-INVITE with `sendonly` SDP direction. The RTP timeout is " +
+				"paused while held, and a 2-hour auto-hangup timer starts.",
+			Tags: []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Call held"},
+				400: {Description: "Not a SIP leg"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg is not in connected state, or already held"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/hold", OperationID: "unholdLeg",
+			Summary:     "Resume a held SIP call",
+			Description: "Sends a re-INVITE with `sendrecv` SDP direction.",
+			Tags:        []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Call resumed"},
+				400: {Description: "Not a SIP leg"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg is not held"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/dtmf", OperationID: "sendDTMF",
+			Summary:     "Send DTMF digits on a leg",
+			Tags:        []string{"Legs"},
+			RequestType: DTMFRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Digits sent"},
+				400: {Description: "Invalid JSON or empty digits"},
+				404: {Description: "Leg not found"},
+				500: {Description: "DTMF writer unavailable"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/play", OperationID: "playLeg",
+			Summary:     "Start audio playback to a leg",
+			Tags:        []string{"Legs"},
+			RequestType: PlaybackRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Playback started"},
+				400: {Description: "Invalid JSON or volume out of range"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg has no audio writer"},
+			},
+		},
+		{
+			Method: "PATCH", Path: "/legs/{id}/play/{playbackID}", OperationID: "volumePlayLeg",
+			Summary:     "Change the volume of an active leg playback",
+			Tags:        []string{"Legs"},
+			RequestType: VolumeRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Volume updated"},
+				400: {Description: "Invalid JSON or volume out of range"},
+				404: {Description: "Playback not found"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/play/{playbackID}", OperationID: "stopPlayLeg",
+			Summary: "Stop audio playback on a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Playback stopped"},
+				404: {Description: "No playback in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/tts", OperationID: "ttsLeg",
+			Summary: "Synthesize speech and play it on a leg",
+			Description: "Synthesizes the provided text using the configured TTS provider and plays the audio on the leg. " +
+				"When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.",
+			Tags:        []string{"Legs"},
+			RequestType: TTSRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "TTS playback started"},
+				400: {Description: "Invalid JSON, missing text/voice, or volume out of range"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg has no audio writer"},
+				503: {Description: "No API key provided for the selected provider"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/record", OperationID: "recordLeg",
+			Summary: "Start recording a leg to a WAV file",
+			Description: "For SIP legs, recording is stereo (left=incoming, right=outgoing). " +
+				"For legs in a room, stereo at 16kHz (left=participant audio, right=mixed-minus-self).",
+			Tags:        []string{"Legs"},
+			RequestType: RecordRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Recording started"},
+				400: {Description: "Invalid storage type, S3 not configured, or invalid S3 credentials"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg has no audio reader or room not found"},
+				500: {Description: "Failed to create recording file"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/record", OperationID: "stopRecordLeg",
+			Summary: "Stop recording a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Recording stopped"},
+				404: {Description: "No recording in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/stt", OperationID: "sttLeg",
+			Summary:     "Start real-time speech-to-text on a leg",
+			Tags:        []string{"Legs"},
+			RequestType: STTRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "STT started"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg not connected, STT already running, or no audio reader"},
+				503: {Description: "No ElevenLabs API key provided"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/stt", OperationID: "stopSTTLeg",
+			Summary: "Stop speech-to-text on a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "STT stopped"},
+				404: {Description: "No STT in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/agent", OperationID: "agentLeg",
+			Summary: "Attach an AI agent to a leg",
+			Description: "Bridges audio bidirectionally with a conversational AI agent. " +
+				"Supported providers: `elevenlabs` (default), `vapi`, `pipecat`. " +
+				"Standalone legs use direct audio; legs in a room use mixer taps.",
+			Tags:        []string{"Legs"},
+			RequestType: AgentRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Agent started"},
+				400: {Description: "Invalid JSON or missing agent_id"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg not connected, agent already attached, or no audio reader/writer"},
+				503: {Description: "No API key provided for the selected provider"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/legs/{id}/agent", OperationID: "stopAgentLeg",
+			Summary: "Detach the agent from a leg",
+			Tags:    []string{"Legs"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Agent stopped"},
+				404: {Description: "No agent attached to this leg"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/ice-candidates", OperationID: "addICECandidate",
+			Summary: "Send a remote ICE candidate to a WebRTC leg (trickle ICE)",
+			Tags:    []string{"WebRTC"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Candidate added"},
+				400: {Description: "Invalid JSON or leg is not a WebRTC leg"},
+				404: {Description: "Leg not found"},
+				500: {Description: "Failed to add ICE candidate"},
+			},
+		},
+		{
+			Method: "GET", Path: "/legs/{id}/ice-candidates", OperationID: "getICECandidates",
+			Summary: "Get server-side ICE candidates for a WebRTC leg (trickle ICE)",
+			Tags:    []string{"WebRTC"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Buffered ICE candidates"},
+				400: {Description: "Leg is not a WebRTC leg"},
+				404: {Description: "Leg not found"},
+			},
+		},
+
+		// ── Rooms ───────────────────────────────────────────────────────
+		{
+			Method: "POST", Path: "/rooms", OperationID: "createRoom",
+			Summary:     "Create a room",
+			Tags:        []string{"Rooms"},
+			RequestType: CreateRoomRequest{},
+			Responses: map[int]ResponseMeta{
+				201: {Description: "Room created", Type: RoomView{}},
+				409: {Description: "Room ID already exists"},
+			},
+		},
+		{
+			Method: "GET", Path: "/rooms", OperationID: "listRooms",
+			Summary: "List all rooms with participants",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Array of rooms", Type: []RoomView{}},
+			},
+		},
+		{
+			Method: "GET", Path: "/rooms/{id}", OperationID: "getRoom",
+			Summary: "Get a room with participants",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Room details", Type: RoomView{}},
+				404: {Description: "Room not found"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}", OperationID: "deleteRoom",
+			Summary: "Delete a room",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Room deleted"},
+				404: {Description: "Room not found"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/legs", OperationID: "addLegToRoom",
+			Summary: "Add or move a leg to a room",
+			Description: "Add a leg to a room (auto-creates room if it doesn't exist). " +
+				"If the leg is already in a different room, it is atomically moved " +
+				"to the target room. A ringing inbound SIP leg is automatically " +
+				"answered before being added.",
+			Tags:        []string{"Rooms"},
+			RequestType: AddLegRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg added or moved"},
+				400: {Description: "Invalid JSON, leg not found, or leg not connected"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}/legs/{legID}", OperationID: "removeLegFromRoom",
+			Summary: "Remove a leg from a room",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Leg removed"},
+				400: {Description: "Room or leg not found"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/play", OperationID: "playRoom",
+			Summary:     "Play audio to a room",
+			Tags:        []string{"Rooms"},
+			RequestType: PlaybackRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Playback started"},
+				400: {Description: "Invalid JSON or volume out of range"},
+				404: {Description: "Room not found"},
+				409: {Description: "Room has no participants"},
+			},
+		},
+		{
+			Method: "PATCH", Path: "/rooms/{id}/play/{playbackID}", OperationID: "volumePlayRoom",
+			Summary:     "Change the volume of an active room playback",
+			Tags:        []string{"Rooms"},
+			RequestType: VolumeRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Volume updated"},
+				400: {Description: "Invalid JSON or volume out of range"},
+				404: {Description: "Playback not found"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}/play/{playbackID}", OperationID: "stopPlayRoom",
+			Summary: "Stop room playback",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Playback stopped"},
+				404: {Description: "No playback in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/tts", OperationID: "ttsRoom",
+			Summary: "Synthesize speech and play it into a room",
+			Description: "Synthesizes the provided text using the configured TTS provider and plays the audio into the room. " +
+				"When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.",
+			Tags:        []string{"Rooms"},
+			RequestType: TTSRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "TTS playback started"},
+				400: {Description: "Invalid JSON, missing text/voice, or volume out of range"},
+				404: {Description: "Room not found"},
+				409: {Description: "Room has no participants"},
+				503: {Description: "No API key provided for the selected provider"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/record", OperationID: "recordRoom",
+			Summary:     "Start recording the room mix to a WAV file",
+			Description: "Records the full room mix at 16kHz, 16-bit, mono.",
+			Tags:        []string{"Rooms"},
+			RequestType: RecordRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Recording started"},
+				400: {Description: "Invalid storage type, S3 not configured, or invalid S3 credentials"},
+				404: {Description: "Room not found"},
+				409: {Description: "Room has no participants"},
+				500: {Description: "Failed to create recording file"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}/record", OperationID: "stopRecordRoom",
+			Summary: "Stop room recording",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Recording stopped"},
+				404: {Description: "No recording in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/stt", OperationID: "sttRoom",
+			Summary:     "Start speech-to-text on all room participants",
+			Tags:        []string{"Rooms"},
+			RequestType: STTRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "STT started"},
+				404: {Description: "Room not found"},
+				409: {Description: "STT already running or room has no participants"},
+				503: {Description: "No ElevenLabs API key provided"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}/stt", OperationID: "stopSTTRoom",
+			Summary: "Stop speech-to-text on a room",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "STT stopped"},
+				404: {Description: "No STT in progress"},
+			},
+		},
+		{
+			Method: "POST", Path: "/rooms/{id}/agent", OperationID: "agentRoom",
+			Summary: "Attach an AI agent to a room",
+			Description: "The agent joins as a virtual participant, hearing all participants " +
+				"(mixed-minus-self) and speaking to everyone. " +
+				"Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.",
+			Tags:        []string{"Rooms"},
+			RequestType: AgentRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Agent started"},
+				400: {Description: "Invalid JSON or missing agent_id"},
+				404: {Description: "Room not found"},
+				409: {Description: "Agent already attached to this room"},
+				503: {Description: "No API key provided for the selected provider"},
+			},
+		},
+		{
+			Method: "DELETE", Path: "/rooms/{id}/agent", OperationID: "stopAgentRoom",
+			Summary: "Detach the agent from a room",
+			Tags:    []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "Agent stopped"},
+				404: {Description: "No agent attached to this room"},
+			},
+		},
+		{
+			Method: "GET", Path: "/rooms/{id}/ws", OperationID: "wsRoom",
+			Summary: "WebSocket audio stream for a room",
+			Description: "Upgrades to a WebSocket connection and joins the room as a bidirectional " +
+				"audio participant. The client sends and receives 16kHz 16-bit signed " +
+				"little-endian PCM audio (mono), base64-encoded in JSON text frames. " +
+				"Each audio frame is 640 bytes (20ms).",
+			Tags: []string{"Rooms"},
+			Responses: map[int]ResponseMeta{
+				101: {Description: "WebSocket upgrade successful. Server sends a `connected` message followed by mixed-minus-self audio frames."},
+				404: {Description: "Room not found"},
+			},
+		},
+
+		// ── WebRTC ──────────────────────────────────────────────────────
+		{
+			Method: "POST", Path: "/webrtc/offer", OperationID: "webrtcOffer",
+			Summary:     "Establish a WebRTC leg via SDP offer/answer",
+			Tags:        []string{"WebRTC"},
+			RequestType: WebRTCOfferRequest{},
+			Responses: map[int]ResponseMeta{
+				200: {Description: "SDP answer with leg ID"},
+				400: {Description: "Invalid JSON or invalid SDP offer"},
+				500: {Description: "Peer connection, track creation, or answer generation failed"},
+			},
+		},
+	}
+}

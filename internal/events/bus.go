@@ -23,7 +23,7 @@ func (b *Bus) Subscribe(h Handler) {
 	b.handlers = append(b.handlers, h)
 }
 
-func (b *Bus) Publish(typ EventType, data map[string]interface{}) {
+func (b *Bus) Publish(typ EventType, data EventData) {
 	e := Event{
 		Type:       typ,
 		Timestamp:  time.Now().UTC(),

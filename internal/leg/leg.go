@@ -3,6 +3,7 @@ package leg
 import (
 	"context"
 	"io"
+	"math"
 	"sync"
 	"time"
 )
@@ -25,6 +26,32 @@ const (
 	StateHungUp     LegState = "hung_up"
 )
 
+// RTPStats holds inbound RTP stream quality metrics.
+type RTPStats struct {
+	PacketsReceived uint32
+	PacketsLost     uint32
+	JitterMs        float64
+	MOSScore        float64 // 1.0–5.0; 0 if insufficient data (< 2 packets)
+}
+
+// calculateMOS estimates the Mean Opinion Score (1.0–5.0) using a simplified
+// E-model (ITU-T G.107) from packet loss rate (0–1) and jitter in milliseconds.
+func calculateMOS(lossRate, jitterMs float64) float64 {
+	effectiveLatency := jitterMs*2 + 10
+	rFactor := 93.2 - effectiveLatency/40
+	if effectiveLatency >= 160 {
+		rFactor -= 10
+	}
+	rFactor -= lossRate * 100 * 2.5
+	if rFactor < 0 {
+		rFactor = 0
+	} else if rFactor > 100 {
+		rFactor = 100
+	}
+	mos := 1 + 0.035*rFactor + 7e-6*rFactor*(rFactor-60)*(100-rFactor)
+	return math.Round(math.Max(1.0, math.Min(5.0, mos))*100) / 100
+}
+
 type Leg interface {
 	ID() string
 	Type() LegType
@@ -45,6 +72,7 @@ type Leg interface {
 	CreatedAt() time.Time
 	AnsweredAt() time.Time
 	SIPHeaders() map[string]string
+	RTPStats() RTPStats
 }
 
 type Manager struct {

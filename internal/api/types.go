@@ -1,0 +1,264 @@
+package api
+
+import "github.com/VoiceBlender/voiceblender/internal/leg"
+
+// FieldEnrichment holds additional OpenAPI metadata for a struct field
+// that cannot be derived from Go types and tags alone.
+type FieldEnrichment struct {
+	Description string
+	Enum        []string
+	Format      string
+	Default     interface{} // string, int, bool, float64
+	Minimum     *int
+	Maximum     *int
+}
+
+func intPtr(v int) *int { return &v }
+
+// CodecsItemEnum provides the enum for CreateLegRequest.codecs array items.
+var CodecsItemEnum = []string{"PCMU", "PCMA", "G722", "opus"}
+
+// ── Request types ───────────────────────────────────────────────────────
+
+// CreateLegRequest is the request body for POST /v1/legs.
+type CreateLegRequest struct {
+	Type          string            `json:"type"`                     // "sip" or "webrtc"
+	URI           string            `json:"uri"`                      // SIP URI for outbound
+	From          string            `json:"from,omitempty"`           // caller ID (user part of the SIP From header, e.g. "+15551234567")
+	Privacy       string            `json:"privacy,omitempty"`        // SIP Privacy header value (e.g. "id", "none")
+	RingTimeout   int               `json:"ring_timeout,omitempty"`   // seconds; 0 = no timeout
+	MaxDuration   int               `json:"max_duration,omitempty"`   // seconds; 0 = no limit
+	Codecs        []string          `json:"codecs,omitempty"`         // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
+	Headers       map[string]string `json:"headers,omitempty"`        // custom SIP headers for outbound INVITE
+	RoomID        string            `json:"room_id,omitempty"`        // add leg to this room once media is ready (early_media or connected)
+	Auth          *SIPAuth          `json:"auth,omitempty"`           // SIP digest auth credentials (optional)
+	WebhookURL    string            `json:"webhook_url,omitempty"`    // route events for this leg to this URL
+	WebhookSecret string            `json:"webhook_secret,omitempty"` // HMAC secret for webhook signature
+}
+
+var createLegRequestFields = map[string]FieldEnrichment{
+	"type":           {Description: "Leg type", Enum: []string{"sip"}},
+	"uri":            {Description: "SIP URI to dial"},
+	"from":           {Description: `Caller ID — sets the user part of the SIP From header (e.g. "+15551234567", "alice")`},
+	"privacy":        {Description: `SIP Privacy header value (e.g. "id", "none")`},
+	"ring_timeout":   {Description: "Seconds to wait for answer; 0 = no timeout", Default: 0},
+	"max_duration":   {Description: "Maximum call duration in seconds after connect. Automatically hung up when reached. 0 or omitted = no limit.", Default: 0},
+	"codecs":         {Description: "Codec preference order"},
+	"headers":        {Description: "Custom SIP headers to include in the outbound INVITE (e.g. X-Correlation-ID)"},
+	"room_id":        {Description: "Room ID to auto-add the leg to once media is ready (early_media or connected). If the room does not exist, it is automatically created."},
+	"auth":           {Description: "SIP digest authentication credentials. If the remote challenges with 401/407, sipgo will retry with these credentials."},
+	"webhook_url":    {Description: "Route all events for this leg exclusively to this URL instead of global webhooks.", Format: "uri"},
+	"webhook_secret": {Description: "HMAC-SHA256 signing secret for the per-leg webhook."},
+}
+
+// SIPAuth holds SIP digest authentication credentials.
+type SIPAuth struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+var sipAuthFields = map[string]FieldEnrichment{
+	"username": {Description: "SIP auth username"},
+	"password": {Description: "SIP auth password"},
+}
+
+// LegView is the JSON representation of a leg.
+type LegView struct {
+	ID         string            `json:"leg_id"`
+	Type       leg.LegType       `json:"type"`
+	State      leg.LegState      `json:"state"`
+	RoomID     string            `json:"room_id,omitempty"`
+	Muted      bool              `json:"muted"`
+	Held       bool              `json:"held"`
+	SIPHeaders map[string]string `json:"sip_headers,omitempty"`
+}
+
+var legViewFields = map[string]FieldEnrichment{
+	"leg_id":      {Description: "Unique leg identifier (UUID)"},
+	"type":        {Description: "Leg type", Enum: []string{"sip_inbound", "sip_outbound", "webrtc"}},
+	"state":       {Description: "Leg state", Enum: []string{"ringing", "early_media", "connected", "held", "hung_up"}},
+	"room_id":     {Description: "Room ID if the leg is in a room, empty otherwise"},
+	"muted":       {Description: "Whether the leg is muted"},
+	"held":        {Description: "Whether the call is on hold (SIP legs only)"},
+	"sip_headers": {Description: "X-* headers from the inbound INVITE. Only present on sip_inbound legs."},
+}
+
+// CreateRoomRequest is the request body for POST /v1/rooms.
+type CreateRoomRequest struct {
+	ID            string `json:"id"`
+	WebhookURL    string `json:"webhook_url,omitempty"`
+	WebhookSecret string `json:"webhook_secret,omitempty"`
+}
+
+var createRoomRequestFields = map[string]FieldEnrichment{
+	"id":             {Description: "Custom room ID (auto-generated UUID if omitted)"},
+	"webhook_url":    {Description: "Route all events for this room exclusively to this URL instead of global webhooks.", Format: "uri"},
+	"webhook_secret": {Description: "HMAC-SHA256 signing secret for the per-room webhook."},
+}
+
+// RoomView is the JSON representation of a room.
+type RoomView struct {
+	ID           string    `json:"id"`
+	Participants []LegView `json:"participants"`
+}
+
+var roomViewFields = map[string]FieldEnrichment{
+	"id":           {Description: "Room identifier"},
+	"participants": {Description: "Legs currently in this room"},
+}
+
+// AddLegRequest is the request body for POST /v1/rooms/{id}/legs.
+type AddLegRequest struct {
+	LegID string `json:"leg_id"`
+}
+
+var addLegRequestFields = map[string]FieldEnrichment{
+	"leg_id": {Description: "ID of the leg to add"},
+}
+
+// PlaybackRequest is the request body for POST /v1/legs/{id}/play and POST /v1/rooms/{id}/play.
+type PlaybackRequest struct {
+	URL      string `json:"url"`
+	Tone     string `json:"tone"`
+	MimeType string `json:"mime_type"`
+	Repeat   int    `json:"repeat"`
+	Volume   int    `json:"volume"`
+}
+
+var playbackRequestFields = map[string]FieldEnrichment{
+	"url":       {Description: "URL of the audio file (mutually exclusive with tone)", Format: "uri"},
+	"tone":      {Description: "Built-in telephone tone name. Format: {country}_{type} or bare {type} (defaults to US). Types: ringback, busy, dial, congestion. Countries: us, gb, de, fr, au, jp, it, in, br, pl, ru. Examples: us_ringback, gb_busy, dial."},
+	"mime_type": {Description: "MIME type (e.g. audio/wav). Required when using url."},
+	"repeat":    {Description: "Number of times to repeat playback (url only)", Default: 0},
+	"volume":    {Description: "Volume adjustment in dB (-8 to 8)", Minimum: intPtr(-8), Maximum: intPtr(8), Default: 0},
+}
+
+// VolumeRequest is the request body for PATCH /v1/legs/{id}/play/{playbackID}.
+type VolumeRequest struct {
+	Volume int `json:"volume"`
+}
+
+var volumeRequestFields = map[string]FieldEnrichment{
+	"volume": {Description: "Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged)", Minimum: intPtr(-8), Maximum: intPtr(8)},
+}
+
+// DTMFRequest is the request body for POST /v1/legs/{id}/dtmf.
+type DTMFRequest struct {
+	Digits string `json:"digits"`
+}
+
+var dtmfRequestFields = map[string]FieldEnrichment{
+	"digits": {Description: "DTMF digits to send (0-9, *, #)"},
+}
+
+// TTSRequest is the request body for POST /v1/legs/{id}/tts and POST /v1/rooms/{id}/tts.
+type TTSRequest struct {
+	Text     string `json:"text"`
+	Voice    string `json:"voice"`
+	ModelID  string `json:"model_id"`
+	Language string `json:"language,omitempty"`
+	Prompt   string `json:"prompt,omitempty"`
+	Volume   int    `json:"volume"`
+	Provider string `json:"provider,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+}
+
+var ttsRequestFields = map[string]FieldEnrichment{
+	"text":     {Description: "Text to synthesize"},
+	"voice":    {Description: "Provider-specific voice identifier. ElevenLabs: voice name or ID. AWS Polly: voice ID (e.g. Joanna, Matthew). Google Cloud: voice name — either full format (e.g. en-US-Neural2-F) or short name for Gemini models (e.g. Achernar, Kore)."},
+	"model_id": {Description: "Provider-specific model/engine. ElevenLabs: model ID. AWS Polly: engine (standard, neural, long-form, generative; default neural). Google Cloud: model name (e.g. gemini-2.5-pro-tts, chirp3-hd)."},
+	"language": {Description: `Language code (e.g. "en-US", "pl-pl"). Required for Google Gemini TTS voices that use short names (e.g. Achernar). Auto-extracted from full voice names like en-US-Neural2-F.`},
+	"prompt":   {Description: `Style/tone instruction for promptable voice models (Google Gemini TTS only). E.g. "Read aloud in a warm, welcoming tone."`},
+	"volume":   {Description: "Volume adjustment in dB (-8 to 8)", Minimum: intPtr(-8), Maximum: intPtr(8), Default: 0},
+	"provider": {Description: `TTS provider: "elevenlabs" (default), "aws", or "google"`, Enum: []string{"elevenlabs", "aws", "google"}},
+	"api_key":  {Description: "ElevenLabs: API key override (falls back to ELEVENLABS_API_KEY env var). AWS: optional ACCESS_KEY:SECRET_KEY override (falls back to default AWS credential chain). Google Cloud: optional API key override (falls back to Application Default Credentials)."},
+}
+
+// STTRequest is the request body for POST /v1/legs/{id}/stt and POST /v1/rooms/{id}/stt.
+type STTRequest struct {
+	Language string `json:"language"`
+	Partial  bool   `json:"partial"`
+	APIKey   string `json:"api_key,omitempty"`
+}
+
+var sttRequestFields = map[string]FieldEnrichment{
+	"language": {Description: `Language code (e.g. "en", "es")`},
+	"partial":  {Description: "Emit partial (non-final) transcripts", Default: false},
+	"api_key":  {Description: "ElevenLabs API key override"},
+}
+
+// RecordRequest is the request body for POST /v1/legs/{id}/record and POST /v1/rooms/{id}/record.
+type RecordRequest struct {
+	Storage     string `json:"storage"`
+	S3Bucket    string `json:"s3_bucket"`
+	S3Region    string `json:"s3_region"`
+	S3Endpoint  string `json:"s3_endpoint"`
+	S3Prefix    string `json:"s3_prefix"`
+	S3AccessKey string `json:"s3_access_key"`
+	S3SecretKey string `json:"s3_secret_key"`
+}
+
+var recordRequestFields = map[string]FieldEnrichment{
+	"storage":       {Description: `"file" (default) — local disk, "s3" — upload to S3 after recording stops`, Enum: []string{"file", "s3"}},
+	"s3_bucket":     {Description: "S3 bucket name. Overrides S3_BUCKET env var. Required if env var is not set."},
+	"s3_region":     {Description: "AWS region. Overrides S3_REGION env var. Default us-east-1."},
+	"s3_endpoint":   {Description: "Custom S3 endpoint (MinIO, etc.). Overrides S3_ENDPOINT env var."},
+	"s3_prefix":     {Description: "Key prefix (e.g. recordings/). Overrides S3_PREFIX env var."},
+	"s3_access_key": {Description: "AWS access key ID. Overrides default credential chain."},
+	"s3_secret_key": {Description: "AWS secret access key. Must be set together with s3_access_key."},
+}
+
+// AgentRequest is the request body for POST /v1/legs/{id}/agent and POST /v1/rooms/{id}/agent.
+type AgentRequest struct {
+	AgentID          string            `json:"agent_id"`
+	Provider         string            `json:"provider,omitempty"`
+	FirstMessage     string            `json:"first_message,omitempty"`
+	Language         string            `json:"language,omitempty"`
+	DynamicVariables map[string]string `json:"dynamic_variables,omitempty"`
+	APIKey           string            `json:"api_key,omitempty"`
+}
+
+var agentRequestFields = map[string]FieldEnrichment{
+	"agent_id":          {Description: "Provider-specific agent/assistant ID. For Pipecat, this is the WebSocket URL of the bot (e.g. ws://my-bot:8765)."},
+	"provider":          {Description: `Agent provider: "elevenlabs" (default), "vapi", or "pipecat". elevenlabs: ElevenLabs ConvAI WebSocket API. vapi: VAPI conversational AI platform. pipecat: Self-hosted Pipecat bot; agent_id is the bot WebSocket URL.`, Enum: []string{"elevenlabs", "vapi", "pipecat"}},
+	"first_message":     {Description: "Override the agent's first message"},
+	"language":          {Description: "Language code (ElevenLabs only)"},
+	"dynamic_variables": {Description: "Key-value pairs passed to the agent"},
+	"api_key":           {Description: "API key override (falls back to ELEVENLABS_API_KEY or VAPI_API_KEY env var depending on provider). Not required for Pipecat."},
+}
+
+// WebRTCOfferRequest is the request body for POST /v1/webrtc/offer.
+type WebRTCOfferRequest struct {
+	SDP string `json:"sdp"`
+}
+
+var webRTCOfferRequestFields = map[string]FieldEnrichment{
+	"sdp": {Description: "SDP offer from the browser"},
+}
+
+// SchemaEnrichments maps "TypeName.json_field_name" → enrichment metadata.
+// These are the descriptions, enums, formats, defaults, and constraints
+// that cannot be derived from Go struct definitions alone.
+func SchemaEnrichments() map[string]FieldEnrichment {
+	all := make(map[string]FieldEnrichment)
+	collect := func(typeName string, fields map[string]FieldEnrichment) {
+		for k, v := range fields {
+			all[typeName+"."+k] = v
+		}
+	}
+	collect("LegView", legViewFields)
+	collect("RoomView", roomViewFields)
+	collect("CreateLegRequest", createLegRequestFields)
+	collect("SIPAuth", sipAuthFields)
+	collect("CreateRoomRequest", createRoomRequestFields)
+	collect("AddLegRequest", addLegRequestFields)
+	collect("PlaybackRequest", playbackRequestFields)
+	collect("VolumeRequest", volumeRequestFields)
+	collect("DTMFRequest", dtmfRequestFields)
+	collect("TTSRequest", ttsRequestFields)
+	collect("STTRequest", sttRequestFields)
+	collect("RecordRequest", recordRequestFields)
+	collect("AgentRequest", agentRequestFields)
+	collect("WebRTCOfferRequest", webRTCOfferRequestFields)
+	return all
+}

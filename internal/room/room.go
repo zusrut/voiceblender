@@ -29,9 +29,8 @@ func NewRoom(id string, bus *events.Bus, log *slog.Logger) *Room {
 		if !e.Speaking {
 			typ = events.SpeakingStopped
 		}
-		bus.Publish(typ, map[string]interface{}{
-			"leg_id":  e.ParticipantID,
-			"room_id": id,
+		bus.Publish(typ, &events.SpeakingData{
+			LegRoomScope: events.LegRoomScope{LegID: e.ParticipantID, RoomID: id},
 		})
 	})
 	return r

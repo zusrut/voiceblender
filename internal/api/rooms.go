@@ -8,17 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type roomView struct {
-	ID           string    `json:"id"`
-	Participants []legView `json:"participants"`
-}
-
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ID            string `json:"id"`
-		WebhookURL    string `json:"webhook_url,omitempty"`
-		WebhookSecret string `json:"webhook_secret,omitempty"`
-	}
+	var req CreateRoomRequest
 	if err := decodeJSON(r, &req); err != nil {
 		// Allow empty body
 		req.ID = ""
@@ -32,19 +23,19 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	if req.WebhookURL != "" {
 		s.Webhooks.SetRoomWebhook(room.ID, req.WebhookURL, req.WebhookSecret)
 	}
-	writeJSON(w, http.StatusCreated, roomView{ID: room.ID, Participants: []legView{}})
+	writeJSON(w, http.StatusCreated, RoomView{ID: room.ID, Participants: []LegView{}})
 }
 
 func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 	rooms := s.RoomMgr.List()
-	views := make([]roomView, len(rooms))
+	views := make([]RoomView, len(rooms))
 	for i, rm := range rooms {
 		parts := rm.Participants()
-		pViews := make([]legView, len(parts))
+		pViews := make([]LegView, len(parts))
 		for j, p := range parts {
 			pViews[j] = toLegView(p)
 		}
-		views[i] = roomView{ID: rm.ID, Participants: pViews}
+		views[i] = RoomView{ID: rm.ID, Participants: pViews}
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -57,11 +48,11 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := rm.Participants()
-	pViews := make([]legView, len(parts))
+	pViews := make([]LegView, len(parts))
 	for j, p := range parts {
 		pViews[j] = toLegView(p)
 	}
-	writeJSON(w, http.StatusOK, roomView{ID: rm.ID, Participants: pViews})
+	writeJSON(w, http.StatusOK, RoomView{ID: rm.ID, Participants: pViews})
 }
 
 func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +68,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) addLegToRoom(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "id")
-	var req struct {
-		LegID string `json:"leg_id"`
-	}
+	var req AddLegRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return

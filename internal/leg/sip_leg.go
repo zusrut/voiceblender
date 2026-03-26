@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net"
 	"strings"
@@ -80,6 +81,15 @@ type SIPLeg struct {
 	// Optional taps for recording on standalone legs.
 	inTap  io.Writer // copy of decoded incoming PCM (before inFrames)
 	outTap io.Writer // copy of outgoing PCM (from writeLoop, including silence)
+
+	// Inbound RTP stream statistics for MOS calculation (protected by rtpStatsMu).
+	rtpStatsMu    sync.Mutex
+	rtpReceived   uint32
+	rtpFirstSeq   uint16
+	rtpLastSeq    uint16
+	rtpHasFirst   bool
+	rtpJitter     float64 // running jitter in RTP clock units (RFC 3550 §A.8)
+	rtpLastTransit int64  // last transit time in RTP clock units
 
 	log *slog.Logger
 }
@@ -560,6 +570,10 @@ func (l *SIPLeg) readLoop() {
 			return
 		}
 
+		// Track sequence number on ALL valid RTP packets (including DTMF,
+		// comfort noise, etc.) since they share the same sequence number space.
+		l.trackRTPSeq(pkt.SequenceNumber)
+
 		// Handle DTMF telephone-event (PT 101 = 8kHz, PT 100 = 48kHz for Opus)
 		if pkt.PayloadType == 100 || pkt.PayloadType == 101 {
 			ev, err := sipmod.DecodeDTMFEvent(pkt.Payload)
@@ -593,6 +607,10 @@ func (l *SIPLeg) readLoop() {
 		if len(pkt.Payload) == 0 {
 			continue
 		}
+
+		// Update jitter on audio packets only (DTMF retransmits share
+		// timestamps, which would spike the jitter estimate).
+		l.updateRTPJitter(pkt)
 
 		// Decode audio payload
 		samples, err := l.decoder.Decode(pkt.Payload)
@@ -629,6 +647,72 @@ func (l *SIPLeg) readLoop() {
 			}
 			l.inFrames <- pcm
 		}
+	}
+}
+
+// trackRTPSeq updates sequence number and packet count for ALL received RTP
+// packets (audio, DTMF, comfort noise) since they share one sequence space.
+func (l *SIPLeg) trackRTPSeq(seq uint16) {
+	l.rtpStatsMu.Lock()
+	l.rtpReceived++
+	if !l.rtpHasFirst {
+		l.rtpFirstSeq = seq
+		l.rtpLastSeq = seq
+		l.rtpHasFirst = true
+	} else {
+		l.rtpLastSeq = seq
+	}
+	l.rtpStatsMu.Unlock()
+}
+
+// updateRTPJitter updates inter-arrival jitter (RFC 3550 §A.8) on audio
+// packets only. DTMF end-of-event retransmits share the same RTP timestamp,
+// which would spike the jitter estimate if included.
+func (l *SIPLeg) updateRTPJitter(pkt *rtp.Packet) {
+	clockRate := int64(l.codecType.ClockRate())
+	arrival := time.Now().UnixNano() * clockRate / 1e9
+	transit := arrival - int64(pkt.Timestamp)
+
+	l.rtpStatsMu.Lock()
+	if l.rtpLastTransit != 0 {
+		d := transit - l.rtpLastTransit
+		if d < 0 {
+			d = -d
+		}
+		l.rtpJitter += (float64(d) - l.rtpJitter) / 16
+	}
+	l.rtpLastTransit = transit
+	l.rtpStatsMu.Unlock()
+}
+
+// RTPStats returns inbound stream quality metrics and a MOS estimate.
+func (l *SIPLeg) RTPStats() RTPStats {
+	l.rtpStatsMu.Lock()
+	received := l.rtpReceived
+	firstSeq := l.rtpFirstSeq
+	lastSeq := l.rtpLastSeq
+	jitter := l.rtpJitter
+	hasFirst := l.rtpHasFirst
+	clockRate := l.codecType.ClockRate()
+	l.rtpStatsMu.Unlock()
+
+	if !hasFirst || received < 2 {
+		return RTPStats{}
+	}
+
+	expected := uint32(lastSeq-firstSeq) + 1
+	var lost uint32
+	if received < expected {
+		lost = expected - received
+	}
+	lossRate := float64(lost) / float64(expected)
+	jitterMs := jitter / float64(clockRate) * 1000
+
+	return RTPStats{
+		PacketsReceived: received,
+		PacketsLost:     lost,
+		JitterMs:        math.Round(jitterMs*100) / 100,
+		MOSScore:        calculateMOS(lossRate, jitterMs),
 	}
 }
 

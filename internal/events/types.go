@@ -1,6 +1,9 @@
 package events
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type EventType string
 
@@ -44,8 +47,37 @@ const (
 )
 
 type Event struct {
-	Type       EventType              `json:"type"`
-	Timestamp  time.Time              `json:"timestamp"`
-	InstanceID string                 `json:"instance_id,omitempty"`
-	Data       map[string]interface{} `json:"data"`
+	Type       EventType `json:"type"`
+	Timestamp  time.Time `json:"timestamp"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	Data       EventData `json:"-"`
+}
+
+// MarshalJSON flattens the event envelope and data fields into a single JSON
+// object, avoiding a generic "data" wrapper.
+func (e Event) MarshalJSON() ([]byte, error) {
+	envelope := map[string]interface{}{
+		"type":      e.Type,
+		"timestamp": e.Timestamp,
+	}
+	if e.InstanceID != "" {
+		envelope["instance_id"] = e.InstanceID
+	}
+
+	// Marshal the typed data struct and merge its fields into the envelope.
+	if e.Data != nil {
+		dataBytes, err := json.Marshal(e.Data)
+		if err != nil {
+			return nil, err
+		}
+		var dataMap map[string]interface{}
+		if err := json.Unmarshal(dataBytes, &dataMap); err != nil {
+			return nil, err
+		}
+		for k, v := range dataMap {
+			envelope[k] = v
+		}
+	}
+
+	return json.Marshal(envelope)
 }

@@ -109,47 +109,47 @@ func (c *Collector) Handler() http.Handler {
 func (c *Collector) handle(e events.Event) {
 	switch e.Type {
 	case events.LegRinging:
-		legID, _ := e.Data["leg_id"].(string)
+		d := e.Data.(*events.LegRingingData)
 		// Inbound ringing events have "from"/"to"; outbound have "uri".
 		legType := "sip_inbound"
-		if _, hasURI := e.Data["uri"]; hasURI {
+		if d.URI != "" {
 			legType = "sip_outbound"
 		}
 		c.mu.Lock()
-		if legID != "" {
-			c.legType[legID] = legType
+		if d.LegID != "" {
+			c.legType[d.LegID] = legType
 		}
 		c.mu.Unlock()
 		c.activeLegs.Inc()
 		c.legsTotal.WithLabelValues(legType, "ringing").Inc()
 
 	case events.LegConnected:
-		legID, _ := e.Data["leg_id"].(string)
-		legType, _ := e.Data["type"].(string)
+		d := e.Data.(*events.LegConnectedData)
+		legType := d.LegType
 		if legType == "" {
 			legType = "unknown"
 		}
 		// Update the stored type (outbound type is now known with certainty).
 		c.mu.Lock()
-		if legID != "" {
-			c.legType[legID] = legType
+		if d.LegID != "" {
+			c.legType[d.LegID] = legType
 		}
 		c.mu.Unlock()
 		c.legsTotal.WithLabelValues(legType, "connected").Inc()
 
 	case events.LegDisconnected:
-		legID, _ := e.Data["leg_id"].(string)
-		reason, _ := e.Data["reason"].(string)
+		d := e.Data.(*events.LegDisconnectedData)
+		reason := d.Disposition.Reason
 		if reason == "" {
 			reason = "unknown"
 		}
-		durationTotal, _ := e.Data["duration_total"].(float64)
-		durationAnswered, _ := e.Data["duration_answered"].(float64)
+		durationTotal := d.Timing.DurationTotal
+		durationAnswered := d.Timing.DurationAnswered
 
 		c.mu.Lock()
-		legType := c.legType[legID]
-		if legID != "" {
-			delete(c.legType, legID)
+		legType := c.legType[d.LegID]
+		if d.LegID != "" {
+			delete(c.legType, d.LegID)
 		}
 		c.mu.Unlock()
 

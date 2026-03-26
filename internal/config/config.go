@@ -18,6 +18,7 @@ type Config struct {
 	RecordingDir string
 	LogLevel     string
 	WebhookURL        string
+	WebhookSecret     string
 	ElevenLabsAPIKey  string
 	VAPIAPIKey        string
 	S3Bucket   string
@@ -41,6 +42,7 @@ func Load() Config {
 		RecordingDir: envOr("RECORDING_DIR", "/tmp/recordings"),
 		LogLevel:     envOr("LOG_LEVEL", "info"),
 		WebhookURL:        os.Getenv("WEBHOOK_URL"),
+		WebhookSecret:     os.Getenv("WEBHOOK_SECRET"),
 		ElevenLabsAPIKey:  os.Getenv("ELEVENLABS_API_KEY"),
 		VAPIAPIKey:        os.Getenv("VAPI_API_KEY"),
 		S3Bucket:   os.Getenv("S3_BUCKET"),

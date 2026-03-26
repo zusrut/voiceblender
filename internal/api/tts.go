@@ -13,17 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type ttsRequest struct {
-	Text     string `json:"text"`
-	Voice    string `json:"voice"`
-	ModelID  string `json:"model_id"`
-	Language string `json:"language,omitempty"`
-	Prompt   string `json:"prompt,omitempty"`
-	Volume   int    `json:"volume"`
-	Provider string `json:"provider,omitempty"`
-	APIKey   string `json:"api_key,omitempty"`
-}
-
 func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	l, ok := s.LegMgr.Get(id)
@@ -32,7 +21,7 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ttsRequest
+	var req TTSRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -103,13 +92,20 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 				delete(legPlayers.m, id)
 			}
 			legPlayers.Unlock()
-			s.Bus.Publish(events.TTSError, map[string]interface{}{"leg_id": id, "tts_id": ttsID, "error": err.Error()})
+			s.Bus.Publish(events.TTSError, &events.TTSErrorData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				TTSID:        ttsID,
+				Error:        err.Error(),
+			})
 			return
 		}
 		defer result.Audio.Close()
 
 		player.OnStart(func() {
-			s.Bus.Publish(events.TTSStarted, map[string]interface{}{"leg_id": id, "tts_id": ttsID})
+			s.Bus.Publish(events.TTSStarted, &events.TTSStartedData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				TTSID:        ttsID,
+			})
 		})
 
 		playErr := player.PlayReaderAtRate(l.Context(), writer, result.Audio, result.MimeType, uint32(mixer.SampleRate))
@@ -122,9 +118,16 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 		legPlayers.Unlock()
 
 		if playErr != nil && playErr != context.Canceled {
-			s.Bus.Publish(events.TTSError, map[string]interface{}{"leg_id": id, "tts_id": ttsID, "error": playErr.Error()})
+			s.Bus.Publish(events.TTSError, &events.TTSErrorData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				TTSID:        ttsID,
+				Error:        playErr.Error(),
+			})
 		} else {
-			s.Bus.Publish(events.TTSFinished, map[string]interface{}{"leg_id": id, "tts_id": ttsID})
+			s.Bus.Publish(events.TTSFinished, &events.TTSFinishedData{
+				LegRoomScope: events.LegRoomScope{LegID: id},
+				TTSID:        ttsID,
+			})
 		}
 	}()
 
@@ -139,7 +142,7 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ttsRequest
+	var req TTSRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -204,13 +207,20 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 				delete(roomPlayers.m, id)
 			}
 			roomPlayers.Unlock()
-			s.Bus.Publish(events.TTSError, map[string]interface{}{"room_id": id, "tts_id": ttsID, "error": err.Error()})
+			s.Bus.Publish(events.TTSError, &events.TTSErrorData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				TTSID:        ttsID,
+				Error:        err.Error(),
+			})
 			return
 		}
 		defer result.Audio.Close()
 
 		player.OnStart(func() {
-			s.Bus.Publish(events.TTSStarted, map[string]interface{}{"room_id": id, "tts_id": ttsID})
+			s.Bus.Publish(events.TTSStarted, &events.TTSStartedData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				TTSID:        ttsID,
+			})
 		})
 
 		playErr := player.PlayReader(parts[0].Context(), pw, result.Audio, result.MimeType)
@@ -226,9 +236,16 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 
 		if playErr != nil && playErr != context.Canceled {
 			s.Log.Debug("room TTS playback error", "room_id", id, "error", playErr)
-			s.Bus.Publish(events.TTSError, map[string]interface{}{"room_id": id, "tts_id": ttsID, "error": playErr.Error()})
+			s.Bus.Publish(events.TTSError, &events.TTSErrorData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				TTSID:        ttsID,
+				Error:        playErr.Error(),
+			})
 		} else {
-			s.Bus.Publish(events.TTSFinished, map[string]interface{}{"room_id": id, "tts_id": ttsID})
+			s.Bus.Publish(events.TTSFinished, &events.TTSFinishedData{
+				LegRoomScope: events.LegRoomScope{RoomID: id},
+				TTSID:        ttsID,
+			})
 		}
 	}()
 
@@ -238,7 +255,7 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 // resolveTTSProvider returns the TTS provider and API key for the request.
 // Returns nil provider if the required API key is missing.
 // When a TTS cache is configured, the provider is wrapped to serve cached results.
-func (s *Server) resolveTTSProvider(req ttsRequest) (tts.Provider, string) {
+func (s *Server) resolveTTSProvider(req TTSRequest) (tts.Provider, string) {
 	apiKey := req.APIKey
 	var provider tts.Provider
 	var name string

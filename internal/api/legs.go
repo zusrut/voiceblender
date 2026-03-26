@@ -18,18 +18,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type legView struct {
-	ID         string            `json:"leg_id"`
-	Type       leg.LegType       `json:"type"`
-	State      leg.LegState      `json:"state"`
-	RoomID     string            `json:"room_id,omitempty"`
-	Muted      bool              `json:"muted"`
-	Held       bool              `json:"held"`
-	SIPHeaders map[string]string `json:"sip_headers,omitempty"`
-}
-
-func toLegView(l leg.Leg) legView {
-	return legView{
+func toLegView(l leg.Leg) LegView {
+	return LegView{
 		ID:         l.ID(),
 		Type:       l.Type(),
 		State:      l.State(),
@@ -40,21 +30,38 @@ func toLegView(l leg.Leg) legView {
 	}
 }
 
-// disconnectData builds the event data map for a leg.disconnected event,
-// including duration_total and duration_answered (in seconds).
-func disconnectData(l leg.Leg, reason string) map[string]interface{} {
+// disconnectData builds the typed event data for a leg.disconnected event,
+// including CDR-style disposition, timing, and optional quality metrics.
+func disconnectData(l leg.Leg, reason string) *events.LegDisconnectedData {
 	now := time.Now()
-	data := map[string]interface{}{
-		"leg_id":         l.ID(),
-		"reason":         reason,
-		"duration_total": roundTo2(now.Sub(l.CreatedAt()).Seconds()),
+	d := &events.LegDisconnectedData{
+		LegScope: events.LegScope{LegID: l.ID()},
+		Disposition: events.DisconnectDisposition{
+			Reason: reason,
+		},
+		Timing: events.CallTiming{
+			DurationTotal: roundTo2(now.Sub(l.CreatedAt()).Seconds()),
+		},
 	}
 	if answered := l.AnsweredAt(); !answered.IsZero() {
-		data["duration_answered"] = roundTo2(now.Sub(answered).Seconds())
-	} else {
-		data["duration_answered"] = float64(0)
+		d.Timing.DurationAnswered = roundTo2(now.Sub(answered).Seconds())
 	}
-	return data
+	if stats := l.RTPStats(); stats.PacketsReceived > 0 {
+		d.Quality = &events.CallQuality{
+			MOSScore:        stats.MOSScore,
+			PacketsReceived: stats.PacketsReceived,
+			PacketsLost:     stats.PacketsLost,
+			JitterMs:        stats.JitterMs,
+		}
+	}
+	return d
+}
+
+// publishDisconnect publishes the leg.disconnected event and then clears the
+// per-leg webhook. The clear MUST happen after publish so the event has a route.
+func (s *Server) publishDisconnect(l leg.Leg, reason string) {
+	s.Bus.Publish(events.LegDisconnected, disconnectData(l, reason))
+	s.Webhooks.ClearLegWebhook(l.ID())
 }
 
 func roundTo2(v float64) float64 {
@@ -112,7 +119,7 @@ func inviteFailureReason(err error, hasRingTimeout bool, ctx context.Context) st
 
 func (s *Server) listLegs(w http.ResponseWriter, r *http.Request) {
 	legs := s.LegMgr.List()
-	views := make([]legView, len(legs))
+	views := make([]LegView, len(legs))
 	for i, l := range legs {
 		views[i] = toLegView(l)
 	}
@@ -196,7 +203,7 @@ func (s *Server) muteLeg(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.Bus.Publish(events.LegMuted, map[string]interface{}{"leg_id": id})
+	s.Bus.Publish(events.LegMuted, &events.LegMutedData{LegScope: events.LegScope{LegID: id}})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "muted"})
 }
 
@@ -217,7 +224,7 @@ func (s *Server) unmuteLeg(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.Bus.Publish(events.LegUnmuted, map[string]interface{}{"leg_id": id})
+	s.Bus.Publish(events.LegUnmuted, &events.LegUnmutedData{LegScope: events.LegScope{LegID: id}})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unmuted"})
 }
 
@@ -246,15 +253,15 @@ func (s *Server) holdLeg(w http.ResponseWriter, r *http.Request) {
 // setupHoldCallbacks wires hold/unhold event publishing on a SIPLeg.
 func (s *Server) setupHoldCallbacks(l *leg.SIPLeg) {
 	l.OnHold(func() {
-		s.Bus.Publish(events.LegHold, map[string]interface{}{
-			"leg_id": l.ID(),
-			"type":   string(l.Type()),
+		s.Bus.Publish(events.LegHold, &events.LegHoldData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			LegType:  string(l.Type()),
 		})
 	})
 	l.OnUnhold(func() {
-		s.Bus.Publish(events.LegUnhold, map[string]interface{}{
-			"leg_id": l.ID(),
-			"type":   string(l.Type()),
+		s.Bus.Publish(events.LegUnhold, &events.LegUnholdData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			LegType:  string(l.Type()),
 		})
 	})
 }
@@ -324,7 +331,9 @@ func (s *Server) cleanupLeg(l leg.Leg) {
 		s.stopRoomAgentIfEmpty(roomID)
 	}
 	s.LegMgr.Remove(l.ID())
-	s.Webhooks.ClearLegWebhook(l.ID())
+	// Note: ClearLegWebhook is intentionally NOT called here. The caller
+	// must publish LegDisconnected before clearing the webhook, otherwise
+	// the event has no route and is silently dropped.
 }
 
 func (s *Server) deleteLeg(w http.ResponseWriter, r *http.Request) {
@@ -339,32 +348,13 @@ func (s *Server) deleteLeg(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("hangup error", "error", err)
 	}
 	s.cleanupLeg(l)
-	s.Bus.Publish(events.LegDisconnected, disconnectData(l, "api_hangup"))
+	s.publishDisconnect(l, "api_hangup")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "hung_up"})
 }
 
-type sipAuth struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type createLegRequest struct {
-	Type          string            `json:"type"`                    // "sip" or "webrtc"
-	URI           string            `json:"uri"`                     // SIP URI for outbound
-	From          string            `json:"from,omitempty"`          // caller ID (user part of the SIP From header, e.g. "+15551234567")
-	Privacy       string            `json:"privacy,omitempty"`       // SIP Privacy header value (e.g. "id", "none")
-	RingTimeout   int               `json:"ring_timeout,omitempty"`  // seconds; 0 = no timeout
-	MaxDuration   int               `json:"max_duration,omitempty"`  // seconds; 0 = no limit
-	Codecs        []string          `json:"codecs,omitempty"`        // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
-	Headers       map[string]string `json:"headers,omitempty"`       // custom SIP headers for outbound INVITE
-	RoomID        string            `json:"room_id,omitempty"`       // add leg to this room once media is ready (early_media or connected)
-	Auth          *sipAuth          `json:"auth,omitempty"`          // SIP digest auth credentials (optional)
-	WebhookURL    string            `json:"webhook_url,omitempty"`   // route events for this leg to this URL
-	WebhookSecret string            `json:"webhook_secret,omitempty"` // HMAC secret for webhook signature
-}
 
 func (s *Server) createLeg(w http.ResponseWriter, r *http.Request) {
-	var req createLegRequest
+	var req CreateLegRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
@@ -378,7 +368,7 @@ func (s *Server) createLeg(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, req createLegRequest) {
+func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, req CreateLegRequest) {
 	recipient := sip.Uri{}
 	if err := sip.ParseUri(req.URI, &recipient); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid SIP URI: %v", err))
@@ -409,16 +399,16 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 	l := leg.NewSIPOutboundPendingLeg(s.SIPEngine, codecs, s.Log)
 
 	l.OnDTMF(func(digit rune) {
-		s.Bus.Publish(events.DTMFReceived, map[string]interface{}{
-			"leg_id": l.ID(),
-			"digit":  string(digit),
+		s.Bus.Publish(events.DTMFReceived, &events.DTMFReceivedData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			Digit:    string(digit),
 		})
 	})
 
 	l.OnRTPTimeout(func() {
 		if l.State() != leg.StateHungUp {
 			s.cleanupLeg(l)
-			s.Bus.Publish(events.LegDisconnected, disconnectData(l, "rtp_timeout"))
+			s.publishDisconnect(l, "rtp_timeout")
 		}
 	})
 
@@ -451,9 +441,9 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 			s.Log.Warn("outbound early media failed", "leg_id", l.ID(), "error", err)
 			return
 		}
-		s.Bus.Publish(events.LegEarlyMedia, map[string]interface{}{
-			"leg_id": l.ID(),
-			"type":   string(l.Type()),
+		s.Bus.Publish(events.LegEarlyMedia, &events.LegEarlyMediaData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			LegType:  string(l.Type()),
 		})
 		addToRoom()
 	}
@@ -468,14 +458,12 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 	if req.WebhookURL != "" {
 		s.Webhooks.SetLegWebhook(l.ID(), req.WebhookURL, req.WebhookSecret)
 	}
-	ringingData := map[string]interface{}{"leg_id": l.ID(), "uri": req.URI}
-	if req.From != "" {
-		ringingData["from"] = req.From
-	}
-	if len(req.Headers) > 0 {
-		ringingData["sip_headers"] = req.Headers
-	}
-	s.Bus.Publish(events.LegRinging, ringingData)
+	s.Bus.Publish(events.LegRinging, &events.LegRingingData{
+		LegScope:   events.LegScope{LegID: l.ID()},
+		URI:        req.URI,
+		From:       req.From,
+		SIPHeaders: req.Headers,
+	})
 
 	go func() {
 		// Derive invite context from the leg's context so that
@@ -493,7 +481,7 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 			if l.State() != leg.StateHungUp { // not already deleted via API
 				reason := inviteFailureReason(err, req.RingTimeout > 0, ctx)
 				s.cleanupLeg(l)
-				s.Bus.Publish(events.LegDisconnected, disconnectData(l, reason))
+				s.publishDisconnect(l, reason)
 			}
 			return
 		}
@@ -503,7 +491,7 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 			call.RTPSess.Close()
 			call.Dialog.Bye(context.Background())
 			s.cleanupLeg(l)
-			s.Bus.Publish(events.LegDisconnected, disconnectData(l, "connect_failed"))
+			s.publishDisconnect(l, "connect_failed")
 			return
 		}
 
@@ -511,11 +499,14 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 		l.OnSessionExpired(func() {
 			if l.State() != leg.StateHungUp {
 				s.cleanupLeg(l)
-				s.Bus.Publish(events.LegDisconnected, disconnectData(l, "session_expired"))
+				s.publishDisconnect(l, "session_expired")
 			}
 		})
 
-		s.Bus.Publish(events.LegConnected, map[string]interface{}{"leg_id": l.ID(), "type": string(l.Type())})
+		s.Bus.Publish(events.LegConnected, &events.LegConnectedData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			LegType:  string(l.Type()),
+		})
 		addToRoom()
 
 		// Monitor for remote hangup or max duration.
@@ -526,20 +517,20 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 			case <-call.Dialog.Context().Done():
 				if l.State() != leg.StateHungUp {
 					s.cleanupLeg(l)
-					s.Bus.Publish(events.LegDisconnected, disconnectData(l, "remote_bye"))
+					s.publishDisconnect(l, "remote_bye")
 				}
 			case <-maxTimer.C:
 				if l.State() != leg.StateHungUp {
 					s.Log.Info("max duration reached", "leg_id", l.ID(), "max_duration", req.MaxDuration)
 					s.cleanupLeg(l)
-					s.Bus.Publish(events.LegDisconnected, disconnectData(l, "max_duration"))
+					s.publishDisconnect(l, "max_duration")
 				}
 			}
 		} else {
 			<-call.Dialog.Context().Done()
 			if l.State() != leg.StateHungUp {
 				s.cleanupLeg(l)
-				s.Bus.Publish(events.LegDisconnected, disconnectData(l, "remote_bye"))
+				s.publishDisconnect(l, "remote_bye")
 			}
 		}
 	}()
@@ -579,15 +570,12 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 		s.Webhooks.SetLegWebhook(l.ID(), webhookURL, webhookSecret)
 	}
 
-	inboundRinging := map[string]interface{}{
-		"leg_id": l.ID(),
-		"from":   call.From,
-		"to":     call.To,
-	}
-	if hdrs := l.SIPHeaders(); len(hdrs) > 0 {
-		inboundRinging["sip_headers"] = hdrs
-	}
-	s.Bus.Publish(events.LegRinging, inboundRinging)
+	s.Bus.Publish(events.LegRinging, &events.LegRingingData{
+		LegScope:   events.LegScope{LegID: l.ID()},
+		From:       call.From,
+		To:         call.To,
+		SIPHeaders: l.SIPHeaders(),
+	})
 
 	// Wait for REST answer or context cancellation (caller hangup / timeout)
 	select {
@@ -601,16 +589,16 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 
 		// Set up DTMF event forwarding
 		l.OnDTMF(func(digit rune) {
-			s.Bus.Publish(events.DTMFReceived, map[string]interface{}{
-				"leg_id": l.ID(),
-				"digit":  string(digit),
+			s.Bus.Publish(events.DTMFReceived, &events.DTMFReceivedData{
+				LegScope: events.LegScope{LegID: l.ID()},
+				Digit:    string(digit),
 			})
 		})
 
 		l.OnRTPTimeout(func() {
 			if l.State() != leg.StateHungUp {
 				s.cleanupLeg(l)
-				s.Bus.Publish(events.LegDisconnected, disconnectData(l, "rtp_timeout"))
+				s.publishDisconnect(l, "rtp_timeout")
 			}
 		})
 
@@ -620,17 +608,20 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 		l.OnSessionExpired(func() {
 			if l.State() != leg.StateHungUp {
 				s.cleanupLeg(l)
-				s.Bus.Publish(events.LegDisconnected, disconnectData(l, "session_expired"))
+				s.publishDisconnect(l, "session_expired")
 			}
 		})
 
-		s.Bus.Publish(events.LegConnected, map[string]interface{}{"leg_id": l.ID(), "type": string(l.Type())})
+		s.Bus.Publish(events.LegConnected, &events.LegConnectedData{
+			LegScope: events.LegScope{LegID: l.ID()},
+			LegType:  string(l.Type()),
+		})
 
 		// Block until call ends (BYE received or context cancelled)
 		<-call.Dialog.Context().Done()
 		if l.State() != leg.StateHungUp {
 			s.cleanupLeg(l)
-			s.Bus.Publish(events.LegDisconnected, disconnectData(l, "remote_bye"))
+			s.publishDisconnect(l, "remote_bye")
 		}
 		return
 
@@ -639,5 +630,5 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 	}
 
 	s.cleanupLeg(l)
-	s.Bus.Publish(events.LegDisconnected, disconnectData(l, "caller_cancel"))
+	s.publishDisconnect(l, "caller_cancel")
 }
