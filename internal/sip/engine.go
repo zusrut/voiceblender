@@ -331,6 +331,8 @@ type InviteOptions struct {
 	Headers      []sip.Header      // Extra SIP headers to include in the INVITE
 	FromUser     string            // Override the user part of the From header (caller ID)
 	OnEarlyMedia func(remoteSDP *SDPMedia, rtpSess *RTPSession) // Called on first 183 with SDP
+	AuthUsername string            // SIP digest auth username (optional)
+	AuthPassword string            // SIP digest auth password (optional)
 }
 
 // Invite sends an outbound INVITE and returns an OutboundCall on success.
@@ -387,7 +389,10 @@ func (e *Engine) Invite(ctx context.Context, recipient sip.Uri, opts InviteOptio
 
 	// Wait for 200 OK, processing provisional responses (183) for early media
 	var earlyMediaSent bool
-	answerOpts := sipgo.AnswerOptions{}
+	answerOpts := sipgo.AnswerOptions{
+		Username: opts.AuthUsername,
+		Password: opts.AuthPassword,
+	}
 	if opts.OnEarlyMedia != nil {
 		answerOpts.OnResponse = func(res *sip.Response) error {
 			if earlyMediaSent {

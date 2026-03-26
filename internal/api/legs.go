@@ -340,6 +340,11 @@ func (s *Server) deleteLeg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "hung_up"})
 }
 
+type sipAuth struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type createLegRequest struct {
 	Type        string            `json:"type"`                   // "sip" or "webrtc"
 	URI         string            `json:"uri"`                    // SIP URI for outbound
@@ -350,6 +355,7 @@ type createLegRequest struct {
 	Codecs      []string          `json:"codecs,omitempty"`       // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
 	Headers     map[string]string `json:"headers,omitempty"`      // custom SIP headers for outbound INVITE
 	RoomID      string            `json:"room_id,omitempty"`      // add leg to this room once media is ready (early_media or connected)
+	Auth        *sipAuth          `json:"auth,omitempty"`         // SIP digest auth credentials (optional)
 }
 
 func (s *Server) createLeg(w http.ResponseWriter, r *http.Request) {
@@ -431,6 +437,10 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 
 	// Build invite options.
 	inviteOpts := sipmod.InviteOptions{Codecs: codecs, FromUser: req.From}
+	if req.Auth != nil {
+		inviteOpts.AuthUsername = req.Auth.Username
+		inviteOpts.AuthPassword = req.Auth.Password
+	}
 	inviteOpts.OnEarlyMedia = func(remoteSDP *sipmod.SDPMedia, rtpSess *sipmod.RTPSession) {
 		if err := l.SetupEarlyMediaOutbound(remoteSDP, rtpSess); err != nil {
 			s.Log.Warn("outbound early media failed", "leg_id", l.ID(), "error", err)
