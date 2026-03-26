@@ -603,7 +603,7 @@ Delete a room. All participants are hung up.
 
 ### POST /v1/rooms/{id}/legs
 
-Add a leg to a room. The leg must be in `connected` or `early_media` state. If the room does not exist, it is automatically created.
+Add a leg to a room. The leg must be in `connected` or `early_media` state. If the leg is a ringing inbound SIP leg, it is automatically answered before being added. If the room does not exist, it is automatically created.
 
 **Request:**
 

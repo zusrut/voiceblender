@@ -42,6 +42,8 @@ type SIPLeg struct {
 	createdAt  time.Time
 	answeredAt time.Time // zero if never answered
 	answerCh      chan struct{} // signaled by REST answer endpoint (inbound only)
+	connectedCh   chan struct{} // closed when leg reaches connected state
+	connectedOnce sync.Once    // ensures connectedCh is closed exactly once
 	onDTMF        func(digit rune)
 	onRTPTimeout  func() // called when no RTP received within timeout
 	onHold        func() // called when leg is put on hold
@@ -108,6 +110,7 @@ func NewSIPInboundLeg(call *sipmod.InboundCall, engine *sipmod.Engine, log *slog
 		ctx:             ctx,
 		cancel:          cancel,
 		answerCh:        make(chan struct{}),
+		connectedCh:     make(chan struct{}),
 		callID:          callID,
 		engine:          engine,
 		localIP:         engine.BindIP(),
@@ -248,6 +251,9 @@ func (l *SIPLeg) setState(s LegState) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.state = s
+	if s == StateConnected && l.connectedCh != nil {
+		l.connectedOnce.Do(func() { close(l.connectedCh) })
+	}
 }
 
 func (l *SIPLeg) Context() context.Context { return l.ctx }
@@ -280,6 +286,20 @@ func (l *SIPLeg) SIPHeaders() map[string]string { return l.sipHeaders }
 // AnswerCh returns the channel that is closed when the REST answer endpoint is called.
 func (l *SIPLeg) AnswerCh() <-chan struct{} {
 	return l.answerCh
+}
+
+// WaitConnected blocks until the leg reaches connected state or the context
+// is cancelled. Returns nil if connected, or the context error otherwise.
+func (l *SIPLeg) WaitConnected(ctx context.Context) error {
+	if l.connectedCh == nil {
+		return nil
+	}
+	select {
+	case <-l.connectedCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // SignalAnswer signals the leg to answer (called from REST API).

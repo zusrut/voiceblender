@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/VoiceBlender/voiceblender/internal/leg"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -84,6 +85,20 @@ func (s *Server) addLegToRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Auto-answer ringing inbound SIP legs before adding to the room.
+	l, ok := s.LegMgr.Get(req.LegID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("leg %s not found", req.LegID))
+		return
+	}
+	if sipLeg, ok := l.(*leg.SIPLeg); ok && l.State() == leg.StateRinging && l.Type() == leg.TypeSIPInbound {
+		sipLeg.SignalAnswer()
+		if err := sipLeg.WaitConnected(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("auto-answer failed: %v", err))
+			return
+		}
+	}
+
 	if err := s.RoomMgr.AddLeg(roomID, req.LegID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
