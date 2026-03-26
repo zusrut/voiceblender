@@ -150,6 +150,19 @@ func (e *Engine) handleReInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// Update the existing dialog's CSeq tracking so that the subsequent
+	// ACK (which carries the same CSeq as this re-INVITE) can be matched
+	// by dsCache.ReadAck / dcCache without "invalid CSEQ number" errors.
+	if ds, err := e.dsCache.MatchDialogRequest(req); err == nil {
+		if err := ds.ReadRequest(req, tx); err != nil {
+			e.log.Debug("re-INVITE: ReadRequest on server dialog", "error", err)
+		}
+	} else if dc, err := e.dcCache.MatchRequestDialog(req); err == nil {
+		if err := dc.ReadRequest(req, tx); err != nil {
+			e.log.Debug("re-INVITE: ReadRequest on client dialog", "error", err)
+		}
+	}
+
 	body := req.Body()
 	direction := "sendrecv"
 	if len(body) > 0 {
@@ -162,8 +175,6 @@ func (e *Engine) handleReInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	// Respond 200 OK to the re-INVITE.
-	// We don't change our media, so respond without SDP body.
-	// Many endpoints accept a 200 OK without SDP for re-INVITEs.
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 	if err := tx.Respond(res); err != nil {
 		e.log.Error("re-INVITE: respond failed", "error", err)

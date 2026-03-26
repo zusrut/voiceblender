@@ -590,6 +590,20 @@ func (l *SIPLeg) writeLoop() {
 		case <-ticker.C:
 		}
 
+		// When held, stop sending RTP — the remote is not listening.
+		// Drain any queued outFrames so writers don't block.
+		l.mu.RLock()
+		isHeld := l.held
+		l.mu.RUnlock()
+		if isHeld {
+			select {
+			case <-l.outFrames:
+			default:
+			}
+			timestamp += samplesPerFrame
+			continue
+		}
+
 		// Check for pending DTMF digits.
 		var dtmfDigits string
 		select {
