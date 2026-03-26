@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/pion/rtp"
 )
@@ -16,9 +18,12 @@ var ErrNotRTP = errors.New("not an RTP packet")
 const rtpBufSize = 1500
 
 // RTPSession manages a UDP socket for RTP send/receive.
+// It implements symmetric RTP (RFC 4961): once an RTP packet is received,
+// the remote address is latched to the source IP:port of that packet,
+// overriding the SDP-provided address. This is essential for NAT traversal.
 type RTPSession struct {
 	conn       *net.UDPConn
-	remoteAddr *net.UDPAddr
+	remoteAddr unsafe.Pointer // *net.UDPAddr, accessed atomically
 	localPort  int
 }
 
@@ -50,20 +55,32 @@ func NewRTPSessionOnPort(port int) (*RTPSession, error) {
 	}, nil
 }
 
+// getRemote returns the current remote address atomically.
+func (s *RTPSession) getRemote() *net.UDPAddr {
+	return (*net.UDPAddr)(atomic.LoadPointer(&s.remoteAddr))
+}
+
+// setRemote stores the remote address atomically.
+func (s *RTPSession) setRemote(addr *net.UDPAddr) {
+	atomic.StorePointer(&s.remoteAddr, unsafe.Pointer(addr))
+}
+
 // SetRemote sets the remote address for sending RTP packets.
 func (s *RTPSession) SetRemote(ip string, port int) error {
 	addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
 		return fmt.Errorf("resolve remote: %w", err)
 	}
-	s.remoteAddr = addr
+	s.setRemote(addr)
 	return nil
 }
 
-// ReadRTP reads and unmarshals an RTP packet from the UDP socket. Blocks until data arrives.
+// ReadRTP reads and unmarshals an RTP packet from the UDP socket. Blocks
+// until data arrives. Implements symmetric RTP: the remote address is
+// latched to the source IP:port of each incoming RTP packet.
 func (s *RTPSession) ReadRTP() (*rtp.Packet, error) {
 	buf := make([]byte, rtpBufSize)
-	n, err := s.conn.Read(buf)
+	n, srcAddr, err := s.conn.ReadFromUDP(buf)
 	if err != nil {
 		return nil, err
 	}
@@ -72,19 +89,26 @@ func (s *RTPSession) ReadRTP() (*rtp.Packet, error) {
 	if err := pkt.Unmarshal(buf[:n]); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotRTP, err)
 	}
+
+	// Symmetric RTP: latch remote address to the source of incoming RTP.
+	if srcAddr != nil {
+		s.setRemote(srcAddr)
+	}
+
 	return pkt, nil
 }
 
 // WriteRTP marshals and sends an RTP packet to the remote address.
 func (s *RTPSession) WriteRTP(pkt *rtp.Packet) error {
-	if s.remoteAddr == nil {
+	addr := s.getRemote()
+	if addr == nil {
 		return fmt.Errorf("remote address not set")
 	}
 	data, err := pkt.Marshal()
 	if err != nil {
 		return fmt.Errorf("rtp marshal: %w", err)
 	}
-	_, err = s.conn.WriteToUDP(data, s.remoteAddr)
+	_, err = s.conn.WriteToUDP(data, addr)
 	return err
 }
 
@@ -93,7 +117,8 @@ func (s *RTPSession) WriteRTP(pkt *rtp.Packet) error {
 // punch through NAT devices (port-latching) before the leg's full media
 // pipeline starts.
 func (s *RTPSession) SendKeepalive(payloadType uint8, count int) {
-	if s.remoteAddr == nil || count <= 0 {
+	addr := s.getRemote()
+	if addr == nil || count <= 0 {
 		return
 	}
 	// 160 bytes of 0xFF = 20ms of PCMU silence (works for port-latching
@@ -119,7 +144,7 @@ func (s *RTPSession) SendKeepalive(payloadType uint8, count int) {
 		if err != nil {
 			return
 		}
-		s.conn.WriteToUDP(data, s.remoteAddr)
+		s.conn.WriteToUDP(data, addr)
 		seq++
 		ts += 160
 	}
