@@ -1237,6 +1237,178 @@ func TestOutboundEarlyMedia_HangupDuringEarlyMedia(t *testing.T) {
 	}, 5*time.Second)
 }
 
+func TestCreateLeg_RoomID_AutoJoinOnConnect(t *testing.T) {
+	instA := newTestInstance(t, "instance-a")
+	instB := newTestInstance(t, "instance-b")
+
+	// Create room first.
+	roomResp := httpPost(t, instA.baseURL()+"/v1/rooms", map[string]interface{}{})
+	if roomResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create room: unexpected status %d", roomResp.StatusCode)
+	}
+	var rm roomView
+	decodeJSON(t, roomResp, &rm)
+	t.Logf("room: %s", rm.ID)
+
+	// A dials B with room_id — leg should auto-join room once connected.
+	createResp := httpPost(t, instA.baseURL()+"/v1/legs", map[string]interface{}{
+		"type":    "sip",
+		"uri":     fmt.Sprintf("sip:test@127.0.0.1:%d", instB.sipPort),
+		"codecs":  []string{"PCMU"},
+		"room_id": rm.ID,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create leg: unexpected status %d", createResp.StatusCode)
+	}
+	var outboundLeg legView
+	decodeJSON(t, createResp, &outboundLeg)
+
+	// B answers directly (no early media).
+	inboundLeg := waitForInboundLeg(t, instB.baseURL(), 5*time.Second)
+	answerResp := httpPost(t, fmt.Sprintf("%s/v1/legs/%s/answer", instB.baseURL(), inboundLeg.ID), nil)
+	if answerResp.StatusCode != http.StatusOK {
+		t.Fatalf("answer: unexpected status %d", answerResp.StatusCode)
+	}
+	answerResp.Body.Close()
+
+	waitForLegState(t, instA.baseURL(), outboundLeg.ID, "connected", 5*time.Second)
+
+	// Verify leg.joined_room event.
+	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+	}, 3*time.Second)
+
+	// Verify room shows the participant.
+	getRoomResp := httpGet(t, fmt.Sprintf("%s/v1/rooms/%s", instA.baseURL(), rm.ID))
+	var gotRoom roomView
+	decodeJSON(t, getRoomResp, &gotRoom)
+	if len(gotRoom.Participants) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(gotRoom.Participants))
+	}
+	if gotRoom.Participants[0].ID != outboundLeg.ID {
+		t.Fatalf("expected participant %s, got %s", outboundLeg.ID, gotRoom.Participants[0].ID)
+	}
+
+	// Cleanup.
+	httpDelete(t, fmt.Sprintf("%s/v1/legs/%s", instA.baseURL(), outboundLeg.ID))
+}
+
+func TestCreateLeg_RoomID_AutoJoinOnEarlyMedia(t *testing.T) {
+	instA := newTestInstance(t, "instance-a")
+	instB := newTestInstance(t, "instance-b")
+
+	// Create room first.
+	roomResp := httpPost(t, instA.baseURL()+"/v1/rooms", map[string]interface{}{})
+	if roomResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create room: unexpected status %d", roomResp.StatusCode)
+	}
+	var rm roomView
+	decodeJSON(t, roomResp, &rm)
+
+	// A dials B with room_id.
+	createResp := httpPost(t, instA.baseURL()+"/v1/legs", map[string]interface{}{
+		"type":    "sip",
+		"uri":     fmt.Sprintf("sip:test@127.0.0.1:%d", instB.sipPort),
+		"codecs":  []string{"PCMU"},
+		"room_id": rm.ID,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create leg: unexpected status %d", createResp.StatusCode)
+	}
+	var outboundLeg legView
+	decodeJSON(t, createResp, &outboundLeg)
+
+	// B enables early media → leg should auto-join room during early_media.
+	inboundLeg := waitForInboundLeg(t, instB.baseURL(), 5*time.Second)
+	emResp := httpPost(t, fmt.Sprintf("%s/v1/legs/%s/early-media", instB.baseURL(), inboundLeg.ID), nil)
+	if emResp.StatusCode != http.StatusOK {
+		t.Fatalf("early-media: unexpected status %d", emResp.StatusCode)
+	}
+	emResp.Body.Close()
+
+	waitForLegState(t, instA.baseURL(), outboundLeg.ID, "early_media", 5*time.Second)
+
+	// Verify leg.joined_room event fired during early media.
+	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == rm.ID
+	}, 3*time.Second)
+
+	// B answers — leg stays in room, transitions to connected.
+	answerResp := httpPost(t, fmt.Sprintf("%s/v1/legs/%s/answer", instB.baseURL(), inboundLeg.ID), nil)
+	if answerResp.StatusCode != http.StatusOK {
+		t.Fatalf("answer: unexpected status %d", answerResp.StatusCode)
+	}
+	answerResp.Body.Close()
+
+	waitForLegState(t, instA.baseURL(), outboundLeg.ID, "connected", 5*time.Second)
+
+	// Room should still have exactly 1 participant (no double-add).
+	getRoomResp := httpGet(t, fmt.Sprintf("%s/v1/rooms/%s", instA.baseURL(), rm.ID))
+	var gotRoom roomView
+	decodeJSON(t, getRoomResp, &gotRoom)
+	if len(gotRoom.Participants) != 1 {
+		t.Fatalf("expected 1 participant (no double-add), got %d", len(gotRoom.Participants))
+	}
+
+	// Cleanup.
+	httpDelete(t, fmt.Sprintf("%s/v1/legs/%s", instA.baseURL(), outboundLeg.ID))
+}
+
+func TestCreateLeg_RoomID_AutoCreateRoom(t *testing.T) {
+	instA := newTestInstance(t, "instance-a")
+	instB := newTestInstance(t, "instance-b")
+
+	roomID := "auto-created-room"
+
+	// Verify room does not exist yet.
+	getResp := httpGet(t, fmt.Sprintf("%s/v1/rooms/%s", instA.baseURL(), roomID))
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected room to not exist, got status %d", getResp.StatusCode)
+	}
+	getResp.Body.Close()
+
+	// Create leg with a non-existent room_id — room should be auto-created.
+	createResp := httpPost(t, instA.baseURL()+"/v1/legs", map[string]interface{}{
+		"type":    "sip",
+		"uri":     fmt.Sprintf("sip:test@127.0.0.1:%d", instB.sipPort),
+		"codecs":  []string{"PCMU"},
+		"room_id": roomID,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create leg: unexpected status %d", createResp.StatusCode)
+	}
+	var outboundLeg legView
+	decodeJSON(t, createResp, &outboundLeg)
+
+	// Verify room was auto-created.
+	instA.collector.waitForMatch(t, events.RoomCreated, func(e events.Event) bool {
+		return e.Data["room_id"] == roomID
+	}, 3*time.Second)
+
+	getResp2 := httpGet(t, fmt.Sprintf("%s/v1/rooms/%s", instA.baseURL(), roomID))
+	if getResp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected room to exist after auto-create, got status %d", getResp2.StatusCode)
+	}
+	getResp2.Body.Close()
+
+	// Answer and verify leg joins the auto-created room.
+	inboundLeg := waitForInboundLeg(t, instB.baseURL(), 5*time.Second)
+	answerResp := httpPost(t, fmt.Sprintf("%s/v1/legs/%s/answer", instB.baseURL(), inboundLeg.ID), nil)
+	if answerResp.StatusCode != http.StatusOK {
+		t.Fatalf("answer: unexpected status %d", answerResp.StatusCode)
+	}
+	answerResp.Body.Close()
+
+	waitForLegState(t, instA.baseURL(), outboundLeg.ID, "connected", 5*time.Second)
+
+	instA.collector.waitForMatch(t, events.LegJoinedRoom, func(e events.Event) bool {
+		return e.Data["leg_id"] == outboundLeg.ID && e.Data["room_id"] == roomID
+	}, 3*time.Second)
+
+	// Cleanup.
+	httpDelete(t, fmt.Sprintf("%s/v1/legs/%s", instA.baseURL(), outboundLeg.ID))
+}
+
 func TestRecording_StopWithNoRecording(t *testing.T) {
 	instA := newTestInstance(t, "instance-a")
 	instB := newTestInstance(t, "instance-b")

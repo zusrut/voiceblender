@@ -54,7 +54,8 @@ Originate an outbound SIP call.
   "headers": {
     "X-Correlation-ID": "abc-123",
     "X-Account-ID": "acct-456"
-  }
+  },
+  "room_id": "room-123"
 }
 ```
 
@@ -68,6 +69,7 @@ Originate an outbound SIP call.
 | `max_duration` | integer | no | Maximum call duration in seconds after connect. The call is automatically hung up when reached. 0 or omitted = no limit. |
 | `codecs` | string[] | no | Codec preference order. Supported: `PCMU`, `PCMA`, `G722`, `opus`. Defaults to engine config. |
 | `headers` | object | no | Custom SIP headers to include in the outbound INVITE (e.g. `X-Correlation-ID`). Keys are header names, values are header values. |
+| `room_id` | string | no | Room ID to auto-add the leg to once media is ready. The leg joins the room on `early_media` (183+SDP) or `connected` (200 OK), whichever comes first. If the room does not exist, it is automatically created. |
 
 **Response:** `201 Created` — Leg object (initially in `ringing` state)
 

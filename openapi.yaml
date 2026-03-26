@@ -1269,6 +1269,9 @@ components:
           additionalProperties:
             type: string
           description: Custom SIP headers to include in the outbound INVITE (e.g. X-Correlation-ID)
+        room_id:
+          type: string
+          description: Room ID to auto-add the leg to once media is ready (early_media or connected). If the room does not exist, it is automatically created.
       required: [type, uri]
 
     DTMFRequest:

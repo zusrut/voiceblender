@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/csiwek/VoiceBlender/internal/codec"
@@ -266,6 +267,7 @@ type createLegRequest struct {
 	MaxDuration int               `json:"max_duration,omitempty"` // seconds; 0 = no limit
 	Codecs      []string          `json:"codecs,omitempty"`       // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
 	Headers     map[string]string `json:"headers,omitempty"`      // custom SIP headers for outbound INVITE
+	RoomID      string            `json:"room_id,omitempty"`      // add leg to this room once media is ready (early_media or connected)
 }
 
 func (s *Server) createLeg(w http.ResponseWriter, r *http.Request) {
@@ -301,6 +303,16 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 		codecs = append(codecs, ct)
 	}
 
+	// Ensure room exists if room_id is specified; create it if it doesn't.
+	if req.RoomID != "" {
+		if _, ok := s.RoomMgr.Get(req.RoomID); !ok {
+			if _, err := s.RoomMgr.Create(req.RoomID); err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("create room: %v", err))
+				return
+			}
+		}
+	}
+
 	l := leg.NewSIPOutboundPendingLeg(s.SIPEngine, codecs, s.Log)
 
 	l.OnDTMF(func(digit rune) {
@@ -317,6 +329,22 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 		}
 	})
 
+	// addToRoom adds the leg to the requested room at most once (on early
+	// media or on connect, whichever comes first).
+	var roomJoinOnce sync.Once
+	addToRoom := func() {
+		if req.RoomID == "" {
+			return
+		}
+		roomJoinOnce.Do(func() {
+			if err := s.RoomMgr.AddLeg(req.RoomID, l.ID()); err != nil {
+				s.Log.Warn("auto-add leg to room failed", "leg_id", l.ID(), "room_id", req.RoomID, "error", err)
+				return
+			}
+			s.onLegJoinedRoom(req.RoomID, l.ID())
+		})
+	}
+
 	// Build invite options.
 	inviteOpts := sipmod.InviteOptions{Codecs: codecs, FromUser: req.From}
 	inviteOpts.OnEarlyMedia = func(remoteSDP *sipmod.SDPMedia, rtpSess *sipmod.RTPSession) {
@@ -328,6 +356,7 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 			"leg_id": l.ID(),
 			"type":   string(l.Type()),
 		})
+		addToRoom()
 	}
 	if req.Privacy != "" {
 		inviteOpts.Headers = append(inviteOpts.Headers, sip.NewHeader("Privacy", req.Privacy))
@@ -377,6 +406,7 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 		}
 
 		s.Bus.Publish(events.LegConnected, map[string]interface{}{"leg_id": l.ID(), "type": string(l.Type())})
+		addToRoom()
 
 		// Monitor for remote hangup or max duration.
 		if req.MaxDuration > 0 {
