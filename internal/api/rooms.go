@@ -15,7 +15,9 @@ type roomView struct {
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID string `json:"id"`
+		ID            string `json:"id"`
+		WebhookURL    string `json:"webhook_url,omitempty"`
+		WebhookSecret string `json:"webhook_secret,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		// Allow empty body
@@ -26,6 +28,9 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
+	}
+	if req.WebhookURL != "" {
+		s.Webhooks.SetRoomWebhook(room.ID, req.WebhookURL, req.WebhookSecret)
 	}
 	writeJSON(w, http.StatusCreated, roomView{ID: room.ID, Participants: []legView{}})
 }
@@ -62,6 +67,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	s.cleanupRoomAgent(id)
+	s.Webhooks.ClearRoomWebhook(id)
 	if err := s.RoomMgr.Delete(id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mp3 "github.com/hajimehoshi/go-mp3"
@@ -32,8 +33,8 @@ type Player struct {
 	playing bool
 	cancel  context.CancelFunc
 	log     *slog.Logger
-	onStart func() // called once when streaming actually begins (after successful fetch)
-	volume  int    // -8..8, 0 = unchanged
+	onStart func()       // called once when streaming actually begins (after successful fetch)
+	volume  atomic.Int32 // -8..8, 0 = unchanged; atomic so SetVolume is safe during playback
 }
 
 func NewPlayer(log *slog.Logger) *Player {
@@ -41,7 +42,7 @@ func NewPlayer(log *slog.Logger) *Player {
 }
 
 // SetVolume sets the playback volume level. Range: -8 (quietest) to 8 (loudest).
-// 0 means no change. Each unit is ~3dB.
+// 0 means no change. Each unit is ~3dB. Safe to call during active playback.
 func (p *Player) SetVolume(v int) {
 	if v < -8 {
 		v = -8
@@ -49,7 +50,7 @@ func (p *Player) SetVolume(v int) {
 	if v > 8 {
 		v = 8
 	}
-	p.volume = v
+	p.volume.Store(int32(v))
 }
 
 // OnStart registers a callback that fires once when audio streaming begins,
@@ -337,7 +338,7 @@ func (p *Player) streamRawPCM(ctx context.Context, body io.Reader, writer io.Wri
 
 		// Resample if needed.
 		resampled := resampleLinear(samples, srcRate, targetRate)
-		applyVolume(resampled, p.volume)
+		applyVolume(resampled, int(p.volume.Load()))
 
 		// Write as 16-bit LE PCM, frame-sized.
 		out := make([]byte, outFrameSize)
@@ -419,7 +420,7 @@ func (p *Player) streamMP3(ctx context.Context, body io.Reader, writer io.Writer
 
 		// Resample to target rate.
 		resampled := resampleLinear(monoSamples, srcRate, targetRate)
-		applyVolume(resampled, p.volume)
+		applyVolume(resampled, int(p.volume.Load()))
 
 		// Write as 16-bit LE PCM, frame-sized.
 		out := make([]byte, outFrameSize)
@@ -610,7 +611,7 @@ func (p *Player) streamWAV(ctx context.Context, body io.Reader, writer io.Writer
 
 		// Resample to target rate
 		resampled := resampleLinear(monoSamples, hdr.SampleRate, targetRate)
-		applyVolume(resampled, p.volume)
+		applyVolume(resampled, int(p.volume.Load()))
 
 		// Write as 16-bit LE PCM, frame-sized
 		out := make([]byte, frameSizeBytes)

@@ -23,14 +23,16 @@ type Webhook struct {
 }
 
 type WebhookRegistry struct {
-	mu       sync.RWMutex
-	hooks    map[string]*Webhook
-	bus      *Bus
-	log      *slog.Logger
-	client   *http.Client
-	workCh   chan deliveryJob
-	stopOnce sync.Once
-	stopCh   chan struct{}
+	mu           sync.RWMutex
+	hooks        map[string]*Webhook // global webhooks
+	legWebhooks  map[string]*Webhook // leg_id → Webhook
+	roomWebhooks map[string]*Webhook // room_id → Webhook
+	bus          *Bus
+	log          *slog.Logger
+	client       *http.Client
+	workCh       chan deliveryJob
+	stopOnce     sync.Once
+	stopCh       chan struct{}
 }
 
 type deliveryJob struct {
@@ -40,8 +42,10 @@ type deliveryJob struct {
 
 func NewWebhookRegistry(bus *Bus, log *slog.Logger) *WebhookRegistry {
 	r := &WebhookRegistry{
-		hooks:  make(map[string]*Webhook),
-		bus:    bus,
+		hooks:        make(map[string]*Webhook),
+		legWebhooks:  make(map[string]*Webhook),
+		roomWebhooks: make(map[string]*Webhook),
+		bus:          bus,
 		log:    log,
 		client: &http.Client{Timeout: 10 * time.Second},
 		workCh: make(chan deliveryJob, 1000),
@@ -70,23 +74,28 @@ func (r *WebhookRegistry) Register(url, secret string) *Webhook {
 	return w
 }
 
-// RegisterIfNew registers a webhook only if no webhook with the same URL exists.
-// Returns the existing or newly created webhook.
-func (r *WebhookRegistry) RegisterIfNew(url, secret string) *Webhook {
+func (r *WebhookRegistry) SetLegWebhook(legID, url, secret string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, w := range r.hooks {
-		if w.URL == url {
-			return w
-		}
-	}
-	w := &Webhook{
-		ID:     uuid.New().String(),
-		URL:    url,
-		Secret: secret,
-	}
-	r.hooks[w.ID] = w
-	return w
+	r.legWebhooks[legID] = &Webhook{ID: legID, URL: url, Secret: secret}
+	r.mu.Unlock()
+}
+
+func (r *WebhookRegistry) ClearLegWebhook(legID string) {
+	r.mu.Lock()
+	delete(r.legWebhooks, legID)
+	r.mu.Unlock()
+}
+
+func (r *WebhookRegistry) SetRoomWebhook(roomID, url, secret string) {
+	r.mu.Lock()
+	r.roomWebhooks[roomID] = &Webhook{ID: roomID, URL: url, Secret: secret}
+	r.mu.Unlock()
+}
+
+func (r *WebhookRegistry) ClearRoomWebhook(roomID string) {
+	r.mu.Lock()
+	delete(r.roomWebhooks, roomID)
+	r.mu.Unlock()
 }
 
 func (r *WebhookRegistry) Unregister(id string) bool {
@@ -109,21 +118,42 @@ func (r *WebhookRegistry) List() []*Webhook {
 	return out
 }
 
+func (r *WebhookRegistry) enqueue(w *Webhook, e Event) {
+	select {
+	case r.workCh <- deliveryJob{hook: w, event: e}:
+	case <-r.stopCh:
+	default:
+		r.log.Warn("webhook delivery queue full, dropping event", "webhook_id", w.ID, "event", e.Type)
+	}
+}
+
 func (r *WebhookRegistry) dispatch(e Event) {
+	legID, _ := e.Data["leg_id"].(string)
+	roomID, _ := e.Data["room_id"].(string)
+
 	r.mu.RLock()
-	hooks := make([]*Webhook, 0, len(r.hooks))
-	for _, w := range r.hooks {
-		hooks = append(hooks, w)
+	var target *Webhook
+	if legID != "" {
+		target = r.legWebhooks[legID]
+	}
+	if target == nil && roomID != "" {
+		target = r.roomWebhooks[roomID]
+	}
+	var globalHooks []*Webhook
+	if target == nil {
+		globalHooks = make([]*Webhook, 0, len(r.hooks))
+		for _, w := range r.hooks {
+			globalHooks = append(globalHooks, w)
+		}
 	}
 	r.mu.RUnlock()
-	for _, w := range hooks {
-		select {
-		case r.workCh <- deliveryJob{hook: w, event: e}:
-		case <-r.stopCh:
-			return
-		default:
-			r.log.Warn("webhook delivery queue full, dropping event", "webhook_id", w.ID, "event", e.Type)
-		}
+
+	if target != nil {
+		r.enqueue(target, e)
+		return
+	}
+	for _, w := range globalHooks {
+		r.enqueue(w, e)
 	}
 }
 

@@ -45,6 +45,7 @@ type SIPLeg struct {
 	connectedCh   chan struct{} // closed when leg reaches connected state
 	connectedOnce sync.Once    // ensures connectedCh is closed exactly once
 	onDTMF        func(digit rune)
+	lastDTMFTS    uint32 // timestamp of last fired end-of-event (dedup RFC 4733 retransmits)
 	onRTPTimeout  func() // called when no RTP received within timeout
 	onHold        func() // called when leg is put on hold
 	onUnhold      func() // called when leg is taken off hold
@@ -565,8 +566,10 @@ func (l *SIPLeg) readLoop() {
 			if err != nil {
 				continue
 			}
-			// Only fire callback on end-of-event to avoid duplicates
-			if ev.EndOfEvent {
+			// Only fire callback on end-of-event. RFC 4733 senders retransmit
+			// end-of-event 3 times with the same timestamp — deduplicate on it.
+			if ev.EndOfEvent && pkt.Timestamp != l.lastDTMFTS {
+				l.lastDTMFTS = pkt.Timestamp
 				digit, ok := sipmod.DTMFEventToDigit(ev.Event)
 				if ok {
 					l.mu.RLock()

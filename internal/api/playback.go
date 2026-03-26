@@ -265,6 +265,56 @@ func (s *Server) stopPlayRoom(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
+func (s *Server) volumePlayLeg(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	playbackID := chi.URLParam(r, "playbackID")
+	var req struct {
+		Volume int `json:"volume"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Volume < -8 || req.Volume > 8 {
+		writeError(w, http.StatusBadRequest, "volume must be between -8 and 8")
+		return
+	}
+	legPlayers.Lock()
+	p, ok := legPlayers.m[id][playbackID]
+	legPlayers.Unlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "playback not found")
+		return
+	}
+	p.SetVolume(req.Volume)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) volumePlayRoom(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	playbackID := chi.URLParam(r, "playbackID")
+	var req struct {
+		Volume int `json:"volume"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Volume < -8 || req.Volume > 8 {
+		writeError(w, http.StatusBadRequest, "volume must be between -8 and 8")
+		return
+	}
+	roomPlayers.Lock()
+	p, ok := roomPlayers.m[id][playbackID]
+	roomPlayers.Unlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "playback not found")
+		return
+	}
+	p.SetVolume(req.Volume)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // legPlaybackWriter routes playback PCM frames dynamically based on
 // whether the leg is currently in a room. Frames arrive at 16kHz (mixer
 // rate).

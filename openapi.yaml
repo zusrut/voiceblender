@@ -5,6 +5,14 @@ info:
     VoiceBlender bridges SIP and WebRTC voice calls with multi-party audio
     mixing, real-time speech-to-text, text-to-speech, AI agent integration,
     recording, and webhook-based event delivery.
+
+
+    **Configuration environment variables:**
+    `INSTANCE_ID` (auto-generated UUID; included in all API response bodies and
+    webhook events), `HTTP_ADDR` (:8080), `SIP_BIND_IP`, `SIP_PORT`, `SIP_HOST`,
+    `ICE_SERVERS`, `RECORDING_DIR`, `LOG_LEVEL`, `WEBHOOK_URL`,
+    `ELEVENLABS_API_KEY`, `VAPI_API_KEY` (VAPI agent provider API key),
+    `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_PREFIX`.
   version: 1.0.0
   license:
     name: MIT
@@ -22,6 +30,8 @@ tags:
     description: WebRTC peer connection establishment
   - name: Webhooks
     description: Webhook registration and management
+  - name: Observability
+    description: Metrics and health endpoints
 
 paths:
   # ── Legs ────────────────────────────────────────────────────────────────
@@ -170,6 +180,107 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /legs/{id}/mute:
+    parameters:
+      - $ref: '#/components/parameters/LegId'
+    post:
+      operationId: muteLeg
+      summary: Mute a leg
+      description: >
+        A muted leg's audio is excluded from the room mix and speaking events
+        are suppressed. Taps (recording/STT) still receive the muted leg's own audio.
+      tags: [Legs]
+      responses:
+        '200':
+          description: Leg muted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: muted
+        '404':
+          $ref: '#/components/responses/LegNotFound'
+
+    delete:
+      operationId: unmuteLeg
+      summary: Unmute a leg
+      tags: [Legs]
+      responses:
+        '200':
+          description: Leg unmuted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: unmuted
+        '404':
+          $ref: '#/components/responses/LegNotFound'
+
+  /legs/{id}/hold:
+    parameters:
+      - $ref: '#/components/parameters/LegId'
+    post:
+      operationId: holdLeg
+      summary: Put a SIP call on hold
+      description: >
+        Sends a re-INVITE with `sendonly` SDP direction. The RTP timeout is
+        paused while held, and a 2-hour auto-hangup timer starts.
+      tags: [Legs]
+      responses:
+        '200':
+          description: Call held
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: held
+        '400':
+          description: Not a SIP leg
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LegNotFound'
+        '409':
+          description: Leg is not in connected state, or already held
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      operationId: unholdLeg
+      summary: Resume a held SIP call
+      description: Sends a re-INVITE with `sendrecv` SDP direction.
+      tags: [Legs]
+      responses:
+        '200':
+          description: Call resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: resumed
+        '400':
+          description: Not a SIP leg
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LegNotFound'
+        '409':
+          description: Leg is not held
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /legs/{id}/dtmf:
     parameters:
       - $ref: '#/components/parameters/LegId'
@@ -246,6 +357,37 @@ paths:
     parameters:
       - $ref: '#/components/parameters/LegId'
       - $ref: '#/components/parameters/PlaybackId'
+    patch:
+      operationId: volumePlayLeg
+      summary: Change the volume of an active leg playback
+      tags: [Legs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VolumeRequest'
+      responses:
+        '200':
+          description: Volume updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: ok
+        '400':
+          description: Invalid JSON or volume out of range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Playback not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     delete:
       operationId: stopPlayLeg
       summary: Stop audio playback on a leg
@@ -285,7 +427,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlaybackResponse'
+                $ref: '#/components/schemas/TTSResponse'
         '400':
           description: Invalid JSON, missing text/voice, or volume out of range
           content:
@@ -301,7 +443,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: No ElevenLabs API key provided
+          description: No API key provided for the selected provider
           content:
             application/json:
               schema:
@@ -317,6 +459,11 @@ paths:
         For SIP legs, recording is stereo (left=incoming, right=outgoing).
         For legs in a room, stereo at 16kHz (left=participant audio, right=mixed-minus-self).
       tags: [Legs]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingRequest'
       responses:
         '200':
           description: Recording started
@@ -324,6 +471,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecordingResponse'
+        '400':
+          description: Invalid storage type, S3 not configured, or invalid S3 credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/LegNotFound'
         '409':
@@ -377,6 +530,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   status:
                     type: string
                     example: stt_started
@@ -425,7 +581,8 @@ paths:
       operationId: agentLeg
       summary: Attach an AI agent to a leg
       description: >
-        Bridges audio bidirectionally with an ElevenLabs conversational AI agent.
+        Bridges audio bidirectionally with a conversational AI agent.
+        Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.
         Standalone legs use direct audio; legs in a room use mixer taps.
       tags: [Legs]
       requestBody:
@@ -442,6 +599,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   status:
                     type: string
                     example: agent_started
@@ -463,7 +623,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: No ElevenLabs API key provided
+          description: No API key provided for the selected provider
           content:
             application/json:
               schema:
@@ -582,7 +742,7 @@ paths:
               $ref: '#/components/schemas/AddLegRequest'
       responses:
         '200':
-          description: Leg added
+          description: Leg added or moved
           content:
             application/json:
               schema:
@@ -604,7 +764,50 @@ paths:
         required: true
         schema:
           type: string
-        description: Leg ID to remove
+        description: Leg ID
+    put:
+      operationId: moveLegToRoom
+      summary: Move a leg to a different room
+      tags: [Rooms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                to_room_id:
+                  type: string
+                  description: Destination room ID
+              required: [to_room_id]
+      responses:
+        '200':
+          description: Leg moved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
+                  status:
+                    type: string
+                    example: moved
+                  from:
+                    type: string
+                    description: Source room ID
+                  to:
+                    type: string
+                    description: Destination room ID
+                required: [status, from, to]
+        '400':
+          description: Invalid JSON, leg not found, or move not possible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
     delete:
       operationId: removeLegFromRoom
       summary: Remove a leg from a room
@@ -664,6 +867,37 @@ paths:
     parameters:
       - $ref: '#/components/parameters/RoomId'
       - $ref: '#/components/parameters/PlaybackId'
+    patch:
+      operationId: volumePlayRoom
+      summary: Change the volume of an active room playback
+      tags: [Rooms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VolumeRequest'
+      responses:
+        '200':
+          description: Volume updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: ok
+        '400':
+          description: Invalid JSON or volume out of range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Playback not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     delete:
       operationId: stopPlayRoom
       summary: Stop room playback
@@ -703,7 +937,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlaybackResponse'
+                $ref: '#/components/schemas/TTSResponse'
         '400':
           description: Invalid JSON, missing text/voice, or volume out of range
           content:
@@ -719,7 +953,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: No ElevenLabs API key provided
+          description: No API key provided for the selected provider
           content:
             application/json:
               schema:
@@ -733,6 +967,11 @@ paths:
       summary: Start recording the room mix to a WAV file
       description: Records the full room mix at 16kHz, 16-bit, mono.
       tags: [Rooms]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingRequest'
       responses:
         '200':
           description: Recording started
@@ -740,6 +979,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecordingResponse'
+        '400':
+          description: Invalid storage type, S3 not configured, or invalid S3 credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/RoomNotFound'
         '409':
@@ -793,6 +1038,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   status:
                     type: string
                     example: stt_started
@@ -847,6 +1095,7 @@ paths:
       description: >
         The agent joins as a virtual participant, hearing all participants
         (mixed-minus-self) and speaking to everyone.
+        Supported providers: `elevenlabs` (default), `vapi`, `pipecat`.
       tags: [Rooms]
       requestBody:
         required: true
@@ -862,6 +1111,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   status:
                     type: string
                     example: agent_started
@@ -883,7 +1135,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: No ElevenLabs API key provided
+          description: No API key provided for the selected provider
           content:
             application/json:
               schema:
@@ -953,6 +1205,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   leg_id:
                     type: string
                     description: ID of the created WebRTC leg
@@ -998,6 +1253,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   status:
                     type: string
                     example: added
@@ -1038,6 +1296,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  instance_id:
+                    type: string
+                    description: Instance identifier
                   candidates:
                     type: array
                     items:
@@ -1127,6 +1388,97 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  # ── Observability ───────────────────────────────────────────────────────────
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: >
+        Returns Prometheus-format metrics (text/plain exposition format).
+        Includes VoiceBlender-specific metrics and standard Go runtime metrics.
+      tags: [Observability]
+      responses:
+        '200':
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP voiceblender_active_legs Number of legs currently active.
+                # TYPE voiceblender_active_legs gauge
+                voiceblender_active_legs 3
+
+  /debug/pprof/:
+    get:
+      operationId: pprofIndex
+      summary: pprof index
+      description: >
+        Index of available Go runtime profiles. Only available when the server
+        is started with ENABLE_PPROF=true.
+      tags: [Observability]
+      responses:
+        '200':
+          description: HTML index page listing available profiles
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /debug/pprof/profile:
+    get:
+      operationId: pprofCPU
+      summary: CPU profile
+      description: >
+        30-second CPU profile (duration configurable via ?seconds= query param).
+        Only available when ENABLE_PPROF=true.
+      tags: [Observability]
+      parameters:
+        - name: seconds
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: Profile duration in seconds
+      responses:
+        '200':
+          description: pprof binary profile
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /debug/pprof/heap:
+    get:
+      operationId: pprofHeap
+      summary: Heap memory profile
+      description: Heap memory snapshot. Only available when ENABLE_PPROF=true.
+      tags: [Observability]
+      responses:
+        '200':
+          description: pprof binary profile
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /debug/pprof/goroutine:
+    get:
+      operationId: pprofGoroutine
+      summary: Goroutine stack traces
+      description: All goroutine stack traces. Only available when ENABLE_PPROF=true.
+      tags: [Observability]
+      responses:
+        '200':
+          description: pprof binary profile
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
 # ════════════════════════════════════════════════════════════════════════════
 components:
   parameters:
@@ -1174,6 +1526,9 @@ components:
     Leg:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         leg_id:
           type: string
           description: Unique leg identifier (UUID)
@@ -1182,13 +1537,16 @@ components:
           enum: [sip_inbound, sip_outbound, webrtc]
         state:
           type: string
-          enum: [ringing, early_media, connected, hung_up]
+          enum: [ringing, early_media, connected, held, hung_up]
         room_id:
           type: string
           description: Room ID if the leg is in a room, empty otherwise
         muted:
           type: boolean
           description: Whether the leg is muted
+        held:
+          type: boolean
+          description: Whether the call is on hold (SIP legs only)
         sip_headers:
           type: object
           additionalProperties:
@@ -1199,6 +1557,9 @@ components:
     Room:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         id:
           type: string
           description: Room identifier
@@ -1211,6 +1572,9 @@ components:
     Webhook:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         id:
           type: string
           description: Webhook identifier (UUID)
@@ -1226,6 +1590,9 @@ components:
     Error:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         error:
           type: string
           description: Error message
@@ -1234,6 +1601,9 @@ components:
     StatusResponse:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         status:
           type: string
       required: [status]
@@ -1274,10 +1644,37 @@ components:
           additionalProperties:
             type: string
           description: Custom SIP headers to include in the outbound INVITE (e.g. X-Correlation-ID)
+        auth:
+          type: object
+          description: SIP digest authentication credentials. If the remote challenges with 401/407, sipgo will retry with these credentials.
+          properties:
+            username:
+              type: string
+              description: SIP auth username
+            password:
+              type: string
+              description: SIP auth password
         room_id:
           type: string
           description: Room ID to auto-add the leg to once media is ready (early_media or connected). If the room does not exist, it is automatically created.
+        webhook_url:
+          type: string
+          format: uri
+          description: Route all events for this leg exclusively to this URL instead of global webhooks.
+        webhook_secret:
+          type: string
+          description: HMAC-SHA256 signing secret for the per-leg webhook.
       required: [type, uri]
+
+    VolumeRequest:
+      type: object
+      properties:
+        volume:
+          type: integer
+          minimum: -8
+          maximum: 8
+          description: Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged)
+      required: [volume]
 
     DTMFRequest:
       type: object
@@ -1326,10 +1723,32 @@ components:
           description: Text to synthesize
         voice:
           type: string
-          description: ElevenLabs voice name or ID
+          description: >
+            Provider-specific voice identifier. ElevenLabs: voice name or ID.
+            AWS Polly: voice ID (e.g. Joanna, Matthew). Google Cloud: voice name —
+            either full format (e.g. en-US-Neural2-F) or short name for Gemini
+            models (e.g. Achernar, Kore).
+        provider:
+          type: string
+          enum: [elevenlabs, aws, google]
+          description: 'TTS provider: "elevenlabs" (default), "aws", or "google"'
         model_id:
           type: string
-          description: ElevenLabs model ID
+          description: >
+            Provider-specific model/engine. ElevenLabs: model ID.
+            AWS Polly: engine (standard, neural, long-form, generative; default neural).
+            Google Cloud: model name (e.g. gemini-2.5-pro-tts, chirp3-hd).
+        language:
+          type: string
+          description: >
+            Language code (e.g. "en-US", "pl-pl"). Required for Google Gemini TTS
+            voices that use short names (e.g. Achernar). Auto-extracted from full
+            voice names like en-US-Neural2-F.
+        prompt:
+          type: string
+          description: >
+            Style/tone instruction for promptable voice models (Google Gemini TTS only).
+            E.g. "Read aloud in a warm, welcoming tone."
         volume:
           type: integer
           description: Volume adjustment in dB (-8 to 8)
@@ -1338,7 +1757,11 @@ components:
           default: 0
         api_key:
           type: string
-          description: ElevenLabs API key override
+          description: >
+            ElevenLabs: API key override (falls back to ELEVENLABS_API_KEY env var).
+            AWS: optional ACCESS_KEY:SECRET_KEY override (falls back to default AWS
+            credential chain). Google Cloud: optional API key override (falls back
+            to Application Default Credentials).
       required: [text, voice]
 
     STTRequest:
@@ -1360,13 +1783,23 @@ components:
       properties:
         agent_id:
           type: string
-          description: ElevenLabs agent ID
+          description: >
+            Provider-specific agent/assistant ID. For Pipecat, this is the
+            WebSocket URL of the bot (e.g. ws://my-bot:8765).
+        provider:
+          type: string
+          enum: [elevenlabs, vapi, pipecat]
+          description: >
+            Agent provider: "elevenlabs" (default), "vapi", or "pipecat".
+            elevenlabs: ElevenLabs ConvAI WebSocket API.
+            vapi: VAPI conversational AI platform.
+            pipecat: Self-hosted Pipecat bot; agent_id is the bot WebSocket URL.
         first_message:
           type: string
           description: Override the agent's first message
         language:
           type: string
-          description: Language code
+          description: Language code (ElevenLabs only)
         dynamic_variables:
           type: object
           additionalProperties:
@@ -1374,8 +1807,36 @@ components:
           description: Key-value pairs passed to the agent
         api_key:
           type: string
-          description: ElevenLabs API key override
+          description: >
+            API key override (falls back to ELEVENLABS_API_KEY or VAPI_API_KEY env var
+            depending on provider). Not required for Pipecat.
       required: [agent_id]
+
+    RecordingRequest:
+      type: object
+      properties:
+        storage:
+          type: string
+          enum: [file, s3]
+          description: '"file" (default) — local disk, "s3" — upload to S3 after recording stops'
+        s3_bucket:
+          type: string
+          description: S3 bucket name. Overrides S3_BUCKET env var. Required if env var is not set.
+        s3_region:
+          type: string
+          description: AWS region. Overrides S3_REGION env var. Default us-east-1.
+        s3_endpoint:
+          type: string
+          description: Custom S3 endpoint (MinIO, etc.). Overrides S3_ENDPOINT env var.
+        s3_prefix:
+          type: string
+          description: Key prefix (e.g. recordings/). Overrides S3_PREFIX env var.
+        s3_access_key:
+          type: string
+          description: AWS access key ID. Overrides default credential chain.
+        s3_secret_key:
+          type: string
+          description: AWS secret access key. Must be set together with s3_access_key.
 
     WebRTCOfferRequest:
       type: object
@@ -1417,6 +1878,13 @@ components:
         id:
           type: string
           description: Custom room ID (auto-generated UUID if omitted)
+        webhook_url:
+          type: string
+          format: uri
+          description: Route all events for this room exclusively to this URL instead of global webhooks.
+        webhook_secret:
+          type: string
+          description: HMAC-SHA256 signing secret for the per-room webhook.
 
     AddLegRequest:
       type: object
@@ -1430,6 +1898,9 @@ components:
     PlaybackResponse:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         playback_id:
           type: string
           description: Unique playback identifier
@@ -1438,26 +1909,46 @@ components:
           example: playing
       required: [playback_id, status]
 
+    TTSResponse:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          description: Instance identifier
+        tts_id:
+          type: string
+          description: Unique TTS playback identifier
+        status:
+          type: string
+          example: playing
+      required: [tts_id, status]
+
     RecordingResponse:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         status:
           type: string
           example: recording
         file:
           type: string
-          description: Absolute path to the recording file
+          description: Absolute path to the recording file (or s3://bucket/key URI when storage=s3)
       required: [status, file]
 
     RecordingStopResponse:
       type: object
       properties:
+        instance_id:
+          type: string
+          description: Instance identifier
         status:
           type: string
           example: stopped
         file:
           type: string
-          description: Absolute path to the recording file
+          description: Absolute path to the recording file (or s3://bucket/key URI when storage=s3)
       required: [status, file]
 
     # ── Webhook events ──────────────────────────────────────────────────
@@ -1466,12 +1957,16 @@ components:
       description: >
         Event envelope delivered via HTTP POST to registered webhook URLs.
         Includes X-Signature-256 header when a secret is configured.
+        All API responses include `instance_id` as the first field in the JSON body.
       properties:
         type:
           $ref: '#/components/schemas/WebhookEventType'
         timestamp:
           type: string
           format: date-time
+        instance_id:
+          type: string
+          description: Instance identifier
         data:
           type: object
           description: Event-specific payload
@@ -1486,12 +1981,19 @@ components:
         - leg.disconnected
         - leg.joined_room
         - leg.left_room
+        - leg.muted
+        - leg.unmuted
+        - leg.hold
+        - leg.unhold
         - dtmf.received
         - speaking.started
         - speaking.stopped
         - playback.started
         - playback.finished
         - playback.error
+        - tts.started
+        - tts.finished
+        - tts.error
         - recording.started
         - recording.finished
         - room.created
@@ -1573,6 +2075,12 @@ components:
                             type: string
                             description: 'Disconnect reason. Common SIP failures are mapped to named reasons; unmapped 4xx/5xx/6xx codes appear as sip_{code}.'
                             enum: [api_hangup, remote_bye, caller_cancel, ring_timeout, max_duration, busy, unavailable, not_found, forbidden, unauthorized, timeout, cancelled, not_acceptable, service_unavailable, declined, rtp_timeout, session_expired, invite_failed, connect_failed, ice_failure]
+                          duration_total:
+                            type: number
+                            description: Seconds from leg creation to disconnect
+                          duration_answered:
+                            type: number
+                            description: Seconds from answer to disconnect (0 if never answered)
     leg.joined_room:
       post:
         summary: Leg added to a room
@@ -1603,6 +2111,64 @@ components:
                         properties:
                           leg_id: { type: string }
                           room_id: { type: string }
+    leg.muted:
+      post:
+        summary: Leg muted
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+    leg.unmuted:
+      post:
+        summary: Leg unmuted
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+    leg.hold:
+      post:
+        summary: Leg put on hold (local or remote)
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+                          type: { type: string, description: 'Hold direction: "local" (we put them on hold) or "remote" (they put us on hold)' }
+    leg.unhold:
+      post:
+        summary: Leg taken off hold (local or remote)
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+                          type: { type: string, description: 'Hold direction: "local" or "remote"' }
     dtmf.received:
       post:
         summary: DTMF digit received
@@ -1697,6 +2263,55 @@ components:
                           room_id: { type: string }
                           playback_id: { type: string }
                           error: { type: string }
+    tts.started:
+      post:
+        summary: TTS synthesis began playing
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+                          room_id: { type: string }
+                          tts_id: { type: string }
+    tts.finished:
+      post:
+        summary: TTS synthesis finished playing
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+                          room_id: { type: string }
+                          tts_id: { type: string }
+    tts.error:
+      post:
+        summary: TTS synthesis or playback failed
+        requestBody:
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEvent'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          leg_id: { type: string }
+                          room_id: { type: string }
+                          tts_id: { type: string }
+                          error: { type: string }
     recording.started:
       post:
         summary: Recording began
@@ -1776,7 +2391,7 @@ components:
                           is_final: { type: boolean }
     agent.connected:
       post:
-        summary: Agent connected to ElevenLabs
+        summary: Agent connected to provider
         requestBody:
           content:
             application/json:

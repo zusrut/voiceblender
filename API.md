@@ -77,6 +77,8 @@ Originate an outbound SIP call.
 | `headers` | object | no | Custom SIP headers to include in the outbound INVITE (e.g. `X-Correlation-ID`). Keys are header names, values are header values. |
 | `auth` | object | no | SIP digest authentication credentials. If the remote challenges with 401/407, sipgo will retry with these credentials. Contains `username` (string) and `password` (string). |
 | `room_id` | string | no | Room ID to auto-add the leg to once media is ready. The leg joins the room on `early_media` (183+SDP) or `connected` (200 OK), whichever comes first. If the room does not exist, it is automatically created. |
+| `webhook_url` | string | no | Per-leg webhook URL. Events for this leg are routed exclusively to this URL instead of global webhooks. |
+| `webhook_secret` | string | no | HMAC-SHA256 signing secret for the per-leg webhook. |
 
 **Response:** `201 Created` — Leg object (initially in `ringing` state)
 
@@ -313,6 +315,28 @@ Stop audio playback on a leg.
 ```
 
 **Errors:** `404` — No playback in progress
+
+---
+
+### PATCH /v1/legs/{id}/play/{playbackID}
+
+Change the volume of an active leg playback. Takes effect immediately on the next audio frame. The new level persists for the lifetime of the playback, including across loop iterations.
+
+**Request:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `volume` | integer | yes | Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged) |
+
+**Response:** `200 OK`
+
+```json
+{ "status": "ok" }
+```
+
+**Errors:**
+- `400` — Invalid JSON or volume out of range
+- `404` — Playback not found
 
 ---
 
@@ -593,6 +617,8 @@ Create a room.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | string | no | Custom room ID. Auto-generated UUID if omitted. |
+| `webhook_url` | string | no | Per-room webhook URL. Events for this room are routed exclusively to this URL instead of global webhooks. |
+| `webhook_secret` | string | no | HMAC-SHA256 signing secret for the per-room webhook. |
 
 **Response:** `201 Created` — Room object (empty participants)
 
@@ -730,6 +756,28 @@ Stop room playback.
 ```
 
 **Errors:** `404` — No playback in progress
+
+---
+
+### PATCH /v1/rooms/{id}/play/{playbackID}
+
+Change the volume of an active room playback. Takes effect immediately on the next audio frame. The new level persists for the lifetime of the playback, including across loop iterations.
+
+**Request:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `volume` | integer | yes | Volume adjustment (-8 to 8, ~3dB per step, 0 = unchanged) |
+
+**Response:** `200 OK`
+
+```json
+{ "status": "ok" }
+```
+
+**Errors:**
+- `400` — Invalid JSON or volume out of range
+- `404` — Playback not found
 
 ---
 
@@ -1146,6 +1194,24 @@ Unregister a webhook.
 
 ---
 
+### Per-Resource Webhooks
+
+Each leg or room can have its own webhook URL assigned at creation time (`webhook_url` / `webhook_secret` in the POST request body). When set, all events for that resource are routed exclusively to the resource-specific webhook and are not sent to any global webhook.
+
+Global webhooks registered via `POST /v1/webhooks` act as a catch-all: they receive events only from resources that have no resource-specific webhook set.
+
+**Routing priority (highest to lowest):**
+
+1. **Leg's webhook** — used when the event carries a `leg_id` and that leg has a `webhook_url` set.
+2. **Room's webhook** — used when the event has a `room_id` (but no matching leg webhook) and that room has a `webhook_url` set.
+3. **Global webhooks** — used for all other events.
+
+For events that carry both `leg_id` and `room_id` (e.g. `speaking.started`, `stt.text`), the leg's webhook takes precedence over the room's webhook.
+
+For inbound SIP calls, the `X-Webhook-URL` and `X-Webhook-Secret` SIP headers in the INVITE can set per-leg webhooks on a call-by-call basis, overriding the `WEBHOOK_URL` environment variable.
+
+---
+
 ## Webhook Events
 
 Events are delivered as HTTP POST requests to registered webhook URLs.
@@ -1277,7 +1343,7 @@ All errors return:
 | `ICE_SERVERS` | `stun:stun.l.google.com:19302` | STUN/TURN URLs (comma-separated) |
 | `RECORDING_DIR` | `/tmp/recordings` | Recording output directory |
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
-| `WEBHOOK_URL` | _(none)_ | Default webhook URL for inbound calls (overridden by `X-Webhook-URL` SIP header) |
+| `WEBHOOK_URL` | _(none)_ | Assigns a per-leg webhook URL for inbound SIP calls (overridden by the `X-Webhook-URL` SIP header). Not a global webhook — events for legs created from inbound SIP calls are routed to this URL unless the SIP header overrides it. |
 | `ELEVENLABS_API_KEY` | _(none)_ | Default ElevenLabs API key for TTS, STT, and Agent features (can be overridden per-request via `api_key` in the request body) |
 | `VAPI_API_KEY` | _(none)_ | Default VAPI API key for Agent features when `provider=vapi` (can be overridden per-request via `api_key` in the request body) |
 | `S3_BUCKET` | _(none)_ | S3 bucket name (required for `storage=s3` recordings) |
@@ -1337,4 +1403,54 @@ All errors return:
 
 12. Cleanup
     DELETE /v1/rooms/conference-1
+```
+
+---
+
+## Metrics
+
+### GET /metrics
+
+Returns Prometheus-format metrics for the VoiceBlender instance. No request body or authentication is required.
+
+**Response:** `200 OK` — Prometheus text exposition format (`text/plain; version=0.0.4`)
+
+#### Exported Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `voiceblender_active_legs` | Gauge | — | Number of legs currently in any state (`ringing`, `early_media`, `connected`, `held`) |
+| `voiceblender_active_rooms` | Gauge | — | Number of rooms currently open |
+| `voiceblender_legs_total` | Counter | `type`, `state` | Total leg lifecycle transitions. `type`: `sip_inbound`, `sip_outbound`. `state`: `ringing`, `connected`, `disconnected` |
+| `voiceblender_disconnect_reasons_total` | Counter | `type`, `reason` | Total disconnected legs by type and reason (e.g. `remote_bye`, `api_hangup`, `rtp_timeout`) |
+| `voiceblender_call_duration_seconds` | Histogram | `type` | Answered call duration (time from answer to hangup). Use `rate(sum)/rate(count)` for ACD |
+| `voiceblender_call_total_duration_seconds` | Histogram | `type` | Total leg lifetime including ringing time (time from leg creation to hangup) |
+| Go runtime metrics | — | — | Standard `go_*` and `process_*` metrics from the Prometheus Go client |
+
+#### PromQL Examples
+
+Compute the Average Call Duration (ACD) over a 5-minute window:
+
+```promql
+rate(voiceblender_call_duration_seconds_sum[5m])
+  / rate(voiceblender_call_duration_seconds_count[5m])
+```
+
+### Profiling (pprof)
+
+Only available when the server is started with `ENABLE_PPROF=true`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /debug/pprof/` | Index of available profiles |
+| `GET /debug/pprof/profile` | 30-second CPU profile |
+| `GET /debug/pprof/heap` | Heap memory snapshot |
+| `GET /debug/pprof/goroutine` | All goroutine stack traces |
+| `GET /debug/pprof/trace` | Execution trace |
+| `GET /debug/pprof/cmdline` | Process command line |
+
+**Do not enable in production without access controls** — these endpoints expose internal runtime state.
+
+```
+go tool pprof http://localhost:8080/debug/pprof/profile
 ```

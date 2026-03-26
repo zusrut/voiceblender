@@ -17,6 +17,7 @@ type Config struct {
 	ICEServers   []string
 	RecordingDir string
 	LogLevel     string
+	EnablePprof       bool
 	WebhookURL        string
 	ElevenLabsAPIKey  string
 	VAPIAPIKey        string
@@ -37,6 +38,7 @@ func Load() Config {
 		ICEServers:   strings.Split(envOr("ICE_SERVERS", "stun:stun.l.google.com:19302"), ","),
 		RecordingDir: envOr("RECORDING_DIR", "/tmp/recordings"),
 		LogLevel:     envOr("LOG_LEVEL", "info"),
+		EnablePprof:       os.Getenv("ENABLE_PPROF") == "true",
 		WebhookURL:        os.Getenv("WEBHOOK_URL"),
 		ElevenLabsAPIKey:  os.Getenv("ELEVENLABS_API_KEY"),
 		VAPIAPIKey:        os.Getenv("VAPI_API_KEY"),

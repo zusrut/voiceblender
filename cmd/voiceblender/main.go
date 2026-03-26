@@ -14,6 +14,7 @@ import (
 	"github.com/VoiceBlender/voiceblender/internal/config"
 	"github.com/VoiceBlender/voiceblender/internal/events"
 	"github.com/VoiceBlender/voiceblender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/metrics"
 	"github.com/VoiceBlender/voiceblender/internal/room"
 	sipmod "github.com/VoiceBlender/voiceblender/internal/sip"
 	"github.com/VoiceBlender/voiceblender/internal/storage"
@@ -98,8 +99,11 @@ func main() {
 		s3Backend = b
 	}
 
+	// Prometheus metrics collector
+	metricsCollector := metrics.New(bus)
+
 	// HTTP API server
-	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhookReg, ttsProvider, s3Backend, cfg, log)
+	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhookReg, ttsProvider, s3Backend, metricsCollector, cfg, log)
 	httpSrv := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: apiSrv,

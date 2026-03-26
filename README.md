@@ -17,6 +17,7 @@ A Go service that bridges SIP and WebRTC voice calls with multi-party audio mixi
 - **STT** -- real-time speech-to-text with partial transcripts (ElevenLabs)
 - **AI Agent** -- attach a conversational AI agent to a leg or room (ElevenLabs, VAPI, Pipecat)
 - **Webhooks** -- real-time event delivery with HMAC-SHA256 signing and retry
+- **Prometheus metrics** -- operational metrics exposed at `GET /metrics` (active legs/rooms, call durations, disconnect reasons, Go runtime). See [API.md](API.md) for the full metric reference. Profiling via `go tool pprof` is available at `/debug/pprof/` when `ENABLE_PPROF=true`.
 
 ## Quick Start
 

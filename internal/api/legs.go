@@ -324,6 +324,7 @@ func (s *Server) cleanupLeg(l leg.Leg) {
 		s.stopRoomAgentIfEmpty(roomID)
 	}
 	s.LegMgr.Remove(l.ID())
+	s.Webhooks.ClearLegWebhook(l.ID())
 }
 
 func (s *Server) deleteLeg(w http.ResponseWriter, r *http.Request) {
@@ -348,16 +349,18 @@ type sipAuth struct {
 }
 
 type createLegRequest struct {
-	Type        string            `json:"type"`                   // "sip" or "webrtc"
-	URI         string            `json:"uri"`                    // SIP URI for outbound
-	From        string            `json:"from,omitempty"`         // caller ID (user part of the SIP From header, e.g. "+15551234567")
-	Privacy     string            `json:"privacy,omitempty"`      // SIP Privacy header value (e.g. "id", "none")
-	RingTimeout int               `json:"ring_timeout,omitempty"` // seconds; 0 = no timeout
-	MaxDuration int               `json:"max_duration,omitempty"` // seconds; 0 = no limit
-	Codecs      []string          `json:"codecs,omitempty"`       // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
-	Headers     map[string]string `json:"headers,omitempty"`      // custom SIP headers for outbound INVITE
-	RoomID      string            `json:"room_id,omitempty"`      // add leg to this room once media is ready (early_media or connected)
-	Auth        *sipAuth          `json:"auth,omitempty"`         // SIP digest auth credentials (optional)
+	Type          string            `json:"type"`                    // "sip" or "webrtc"
+	URI           string            `json:"uri"`                     // SIP URI for outbound
+	From          string            `json:"from,omitempty"`          // caller ID (user part of the SIP From header, e.g. "+15551234567")
+	Privacy       string            `json:"privacy,omitempty"`       // SIP Privacy header value (e.g. "id", "none")
+	RingTimeout   int               `json:"ring_timeout,omitempty"`  // seconds; 0 = no timeout
+	MaxDuration   int               `json:"max_duration,omitempty"`  // seconds; 0 = no limit
+	Codecs        []string          `json:"codecs,omitempty"`        // codec preference order, e.g. ["PCMU","PCMA","G722","opus"]
+	Headers       map[string]string `json:"headers,omitempty"`       // custom SIP headers for outbound INVITE
+	RoomID        string            `json:"room_id,omitempty"`       // add leg to this room once media is ready (early_media or connected)
+	Auth          *sipAuth          `json:"auth,omitempty"`          // SIP digest auth credentials (optional)
+	WebhookURL    string            `json:"webhook_url,omitempty"`   // route events for this leg to this URL
+	WebhookSecret string            `json:"webhook_secret,omitempty"` // HMAC secret for webhook signature
 }
 
 func (s *Server) createLeg(w http.ResponseWriter, r *http.Request) {
@@ -462,6 +465,9 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 	}
 
 	s.LegMgr.Add(l)
+	if req.WebhookURL != "" {
+		s.Webhooks.SetLegWebhook(l.ID(), req.WebhookURL, req.WebhookSecret)
+	}
 	ringingData := map[string]interface{}{"leg_id": l.ID(), "uri": req.URI}
 	if req.From != "" {
 		ringingData["from"] = req.From
@@ -543,18 +549,6 @@ func (s *Server) createSIPOutboundLeg(w http.ResponseWriter, r *http.Request, re
 
 // HandleInboundCall is called from the SIP engine for inbound INVITE requests.
 func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
-	// Register webhook from SIP X-Webhook-URL header, falling back to config default.
-	webhookURL := ""
-	if h := call.Request.GetHeader("X-Webhook-URL"); h != nil {
-		webhookURL = h.Value()
-	}
-	if webhookURL == "" {
-		webhookURL = s.Config.WebhookURL
-	}
-	if webhookURL != "" {
-		s.Webhooks.RegisterIfNew(webhookURL, "")
-	}
-
 	// Send provisional responses
 	if err := call.Dialog.Respond(sip.StatusTrying, "Trying", nil); err != nil {
 		s.Log.Error("failed to send 100 Trying", "error", err)
@@ -567,6 +561,24 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 
 	l := leg.NewSIPInboundLeg(call, s.SIPEngine, s.Log)
 	s.LegMgr.Add(l)
+
+	// Route events for this leg to the per-leg webhook. Extract URL from SIP
+	// X-Webhook-URL header, falling back to the configured default.
+	webhookURL := ""
+	if h := call.Request.GetHeader("X-Webhook-URL"); h != nil {
+		webhookURL = h.Value()
+	}
+	if webhookURL == "" {
+		webhookURL = s.Config.WebhookURL
+	}
+	webhookSecret := ""
+	if h := call.Request.GetHeader("X-Webhook-Secret"); h != nil {
+		webhookSecret = h.Value()
+	}
+	if webhookURL != "" {
+		s.Webhooks.SetLegWebhook(l.ID(), webhookURL, webhookSecret)
+	}
+
 	inboundRinging := map[string]interface{}{
 		"leg_id": l.ID(),
 		"from":   call.From,
@@ -583,6 +595,7 @@ func (s *Server) HandleInboundCall(call *sipmod.InboundCall) {
 		if err := l.Answer(context.Background()); err != nil {
 			s.Log.Error("answer failed", "leg_id", l.ID(), "error", err)
 			s.LegMgr.Remove(l.ID())
+			s.Webhooks.ClearLegWebhook(l.ID())
 			return
 		}
 

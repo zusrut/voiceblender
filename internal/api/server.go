@@ -3,10 +3,12 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 
 	"github.com/VoiceBlender/voiceblender/internal/config"
 	"github.com/VoiceBlender/voiceblender/internal/events"
 	"github.com/VoiceBlender/voiceblender/internal/leg"
+	"github.com/VoiceBlender/voiceblender/internal/metrics"
 	"github.com/VoiceBlender/voiceblender/internal/room"
 	sipmod "github.com/VoiceBlender/voiceblender/internal/sip"
 	"github.com/VoiceBlender/voiceblender/internal/storage"
@@ -17,15 +19,16 @@ import (
 
 type Server struct {
 	Router    *chi.Mux
-	LegMgr   *leg.Manager
-	RoomMgr  *room.Manager
+	LegMgr    *leg.Manager
+	RoomMgr   *room.Manager
 	SIPEngine *sipmod.Engine
-	Bus      *events.Bus
-	Webhooks *events.WebhookRegistry
-	TTS      tts.Provider
-	S3       storage.Backend
-	Config   config.Config
-	Log      *slog.Logger
+	Bus       *events.Bus
+	Webhooks  *events.WebhookRegistry
+	TTS       tts.Provider
+	S3        storage.Backend
+	Metrics   *metrics.Collector
+	Config    config.Config
+	Log       *slog.Logger
 }
 
 func NewServer(
@@ -36,21 +39,23 @@ func NewServer(
 	webhooks *events.WebhookRegistry,
 	ttsProvider tts.Provider,
 	s3Backend storage.Backend,
+	metricsCollector *metrics.Collector,
 	cfg config.Config,
 	log *slog.Logger,
 ) *Server {
 	instanceID = cfg.InstanceID
 	s := &Server{
 		Router:    chi.NewRouter(),
-		LegMgr:   legMgr,
-		RoomMgr:  roomMgr,
+		LegMgr:    legMgr,
+		RoomMgr:   roomMgr,
 		SIPEngine: engine,
-		Bus:      bus,
-		Webhooks: webhooks,
-		TTS:      ttsProvider,
-		S3:       s3Backend,
-		Config:   cfg,
-		Log:      log,
+		Bus:       bus,
+		Webhooks:  webhooks,
+		TTS:       ttsProvider,
+		S3:        s3Backend,
+		Metrics:   metricsCollector,
+		Config:    cfg,
+		Log:       log,
 	}
 	s.routes()
 	return s
@@ -68,6 +73,26 @@ func (s *Server) routes() {
 		})
 	})
 
+	// Prometheus metrics — outside /v1, plain text response.
+	if s.Metrics != nil {
+		r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			s.Metrics.Handler().ServeHTTP(w, r)
+		})
+	}
+
+	// pprof — only when explicitly enabled via ENABLE_PPROF=true.
+	if s.Config.EnablePprof {
+		s.Log.Info("pprof enabled")
+		r.Get("/debug/pprof/", http.HandlerFunc(pprof.Index))
+		r.Get("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+		r.Get("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+		r.Get("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+		r.Post("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+		r.Get("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+		r.Get("/debug/pprof/{profile}", http.HandlerFunc(pprof.Index))
+	}
+
 	r.Route("/v1", func(r chi.Router) {
 		// Legs
 		r.Post("/legs", s.createLeg)
@@ -83,6 +108,7 @@ func (s *Server) routes() {
 		r.Post("/legs/{id}/dtmf", s.sendDTMF)
 		r.Post("/legs/{id}/play", s.playLeg)
 		r.Delete("/legs/{id}/play/{playbackID}", s.stopPlayLeg)
+		r.Patch("/legs/{id}/play/{playbackID}", s.volumePlayLeg)
 		r.Post("/legs/{id}/tts", s.ttsLeg)
 		r.Post("/legs/{id}/record", s.recordLeg)
 		r.Delete("/legs/{id}/record", s.stopRecordLeg)
@@ -102,6 +128,7 @@ func (s *Server) routes() {
 		r.Delete("/rooms/{id}/legs/{legID}", s.removeLegFromRoom)
 		r.Post("/rooms/{id}/play", s.playRoom)
 		r.Delete("/rooms/{id}/play/{playbackID}", s.stopPlayRoom)
+		r.Patch("/rooms/{id}/play/{playbackID}", s.volumePlayRoom)
 		r.Post("/rooms/{id}/tts", s.ttsRoom)
 		r.Post("/rooms/{id}/record", s.recordRoom)
 		r.Delete("/rooms/{id}/record", s.stopRecordRoom)

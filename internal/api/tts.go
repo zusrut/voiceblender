@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/VoiceBlender/voiceblender/internal/events"
+	"github.com/VoiceBlender/voiceblender/internal/mixer"
 	"github.com/VoiceBlender/voiceblender/internal/playback"
 	"github.com/VoiceBlender/voiceblender/internal/tts"
 	"github.com/go-chi/chi/v5"
@@ -60,10 +61,20 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writer := l.AudioWriter()
-	if writer == nil {
+	directWriter := l.AudioWriter()
+	if directWriter == nil {
 		writeError(w, http.StatusConflict, "leg has no audio writer")
 		return
+	}
+
+	// Route through the mixer inject channel when the leg is in a room,
+	// identical to playLeg. This prevents contention on the leg's outFrames
+	// channel which the mixer writeLoop already owns.
+	writer := &legPlaybackWriter{
+		legID:        id,
+		leg:          l,
+		directWriter: directWriter,
+		roomMgr:      s.RoomMgr,
 	}
 
 	ttsID := "tts-" + uuid.New().String()[:8]
@@ -101,7 +112,7 @@ func (s *Server) ttsLeg(w http.ResponseWriter, r *http.Request) {
 			s.Bus.Publish(events.TTSStarted, map[string]interface{}{"leg_id": id, "tts_id": ttsID})
 		})
 
-		playErr := player.PlayReaderAtRate(l.Context(), writer, result.Audio, result.MimeType, uint32(l.SampleRate()))
+		playErr := player.PlayReaderAtRate(l.Context(), writer, result.Audio, result.MimeType, uint32(mixer.SampleRate))
 
 		legPlayers.Lock()
 		delete(legPlayers.m[id], ttsID)
