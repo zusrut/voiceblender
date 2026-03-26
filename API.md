@@ -1139,8 +1139,11 @@ The signature is computed over the raw JSON request body using HMAC-SHA256 with 
 | `leg.hold` | Leg put on hold (local or remote) | `leg_id`, `type` |
 | `leg.unhold` | Leg taken off hold (local or remote) | `leg_id`, `type` |
 | `dtmf.received` | DTMF digit received | `leg_id`, `digit` |
-| `speaking.started` | Participant started speaking | `leg_id`, `room_id` |
-| `speaking.stopped` | Participant stopped speaking | `leg_id`, `room_id` |
+| `speaking.started` | Participant started speaking (room only) | `leg_id`, `room_id` |
+| `speaking.stopped` | Participant stopped speaking (room only) | `leg_id`, `room_id` |
+
+> **Note:** `speaking.started` and `speaking.stopped` events require the leg to be in a room. Voice activity detection runs inside the room mixer; standalone legs do not emit speaking events.
+
 | `playback.started` | Playback began | `leg_id` or `room_id`, `playback_id` |
 | `playback.finished` | Playback ended | `leg_id` or `room_id`, `playback_id` |
 | `playback.error` | Playback failed | `leg_id` or `room_id`, `playback_id`, `error` |
