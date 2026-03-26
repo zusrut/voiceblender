@@ -88,7 +88,7 @@ func newTestInstance(t *testing.T, name string) *testInstance {
 		t.Fatalf("[%s] new engine: %v", name, err)
 	}
 
-	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhooks, nil, nil, nil, cfg, log)
+	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhooks, nil, nil, nil, nil, cfg, log)
 	engine.OnInvite(apiSrv.HandleInboundCall)
 	engine.OnReInvite(apiSrv.HandleReInvite)
 

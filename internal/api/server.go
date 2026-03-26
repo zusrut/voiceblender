@@ -3,7 +3,6 @@ package api
 import (
 	"log/slog"
 	"net/http"
-	"net/http/pprof"
 
 	"github.com/VoiceBlender/voiceblender/internal/config"
 	"github.com/VoiceBlender/voiceblender/internal/events"
@@ -13,6 +12,7 @@ import (
 	sipmod "github.com/VoiceBlender/voiceblender/internal/sip"
 	"github.com/VoiceBlender/voiceblender/internal/storage"
 	"github.com/VoiceBlender/voiceblender/internal/tts"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -25,6 +25,7 @@ type Server struct {
 	Bus       *events.Bus
 	Webhooks  *events.WebhookRegistry
 	TTS       tts.Provider
+	TTSCache  *tts.Cache
 	S3        storage.Backend
 	Metrics   *metrics.Collector
 	Config    config.Config
@@ -38,6 +39,7 @@ func NewServer(
 	bus *events.Bus,
 	webhooks *events.WebhookRegistry,
 	ttsProvider tts.Provider,
+	ttsCache *tts.Cache,
 	s3Backend storage.Backend,
 	metricsCollector *metrics.Collector,
 	cfg config.Config,
@@ -52,6 +54,7 @@ func NewServer(
 		Bus:       bus,
 		Webhooks:  webhooks,
 		TTS:       ttsProvider,
+		TTSCache:  ttsCache,
 		S3:        s3Backend,
 		Metrics:   metricsCollector,
 		Config:    cfg,
@@ -81,17 +84,8 @@ func (s *Server) routes() {
 		})
 	}
 
-	// pprof — only when explicitly enabled via ENABLE_PPROF=true.
-	if s.Config.EnablePprof {
-		s.Log.Info("pprof enabled")
-		r.Get("/debug/pprof/", http.HandlerFunc(pprof.Index))
-		r.Get("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
-		r.Get("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-		r.Get("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-		r.Post("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-		r.Get("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
-		r.Get("/debug/pprof/{profile}", http.HandlerFunc(pprof.Index))
-	}
+	// pprof — compiled in only with -tags pprof; no-op otherwise.
+	registerPprof(r, s.Log)
 
 	r.Route("/v1", func(r chi.Router) {
 		// Legs

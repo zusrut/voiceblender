@@ -17,7 +17,6 @@ type Config struct {
 	ICEServers   []string
 	RecordingDir string
 	LogLevel     string
-	EnablePprof       bool
 	WebhookURL        string
 	ElevenLabsAPIKey  string
 	VAPIAPIKey        string
@@ -25,6 +24,9 @@ type Config struct {
 	S3Region   string
 	S3Endpoint string
 	S3Prefix   string
+	TTSCacheEnabled      bool
+	TTSCacheDir          string
+	TTSCacheIncludeAPIKey bool
 }
 
 func Load() Config {
@@ -38,7 +40,6 @@ func Load() Config {
 		ICEServers:   strings.Split(envOr("ICE_SERVERS", "stun:stun.l.google.com:19302"), ","),
 		RecordingDir: envOr("RECORDING_DIR", "/tmp/recordings"),
 		LogLevel:     envOr("LOG_LEVEL", "info"),
-		EnablePprof:       os.Getenv("ENABLE_PPROF") == "true",
 		WebhookURL:        os.Getenv("WEBHOOK_URL"),
 		ElevenLabsAPIKey:  os.Getenv("ELEVENLABS_API_KEY"),
 		VAPIAPIKey:        os.Getenv("VAPI_API_KEY"),
@@ -46,6 +47,9 @@ func Load() Config {
 		S3Region:   envOr("S3_REGION", "us-east-1"),
 		S3Endpoint: os.Getenv("S3_ENDPOINT"),
 		S3Prefix:   os.Getenv("S3_PREFIX"),
+		TTSCacheEnabled:      os.Getenv("TTS_CACHE_ENABLED") == "true",
+		TTSCacheDir:          envOr("TTS_CACHE_DIR", "/tmp/tts_cache"),
+		TTSCacheIncludeAPIKey: os.Getenv("TTS_CACHE_INCLUDE_API_KEY") == "true",
 	}
 }
 

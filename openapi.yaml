@@ -12,7 +12,10 @@ info:
     webhook events), `HTTP_ADDR` (:8080), `SIP_BIND_IP`, `SIP_PORT`, `SIP_HOST`,
     `ICE_SERVERS`, `RECORDING_DIR`, `LOG_LEVEL`, `WEBHOOK_URL`,
     `ELEVENLABS_API_KEY`, `VAPI_API_KEY` (VAPI agent provider API key),
-    `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_PREFIX`.
+    `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_PREFIX`,
+    `TTS_CACHE_ENABLED` (default: `false`; when `true`, synthesized TTS audio is cached on disk),
+    `TTS_CACHE_DIR` (default: `/tmp/tts_cache`; directory for cached TTS audio files, used when `TTS_CACHE_ENABLED=true`),
+    `TTS_CACHE_INCLUDE_API_KEY` (default: `false`; when `true`, the API key is included in the cache key so different keys produce separate cache entries).
   version: 1.0.0
   license:
     name: MIT
@@ -414,6 +417,9 @@ paths:
     post:
       operationId: ttsLeg
       summary: Synthesize speech and play it on a leg
+      description: >
+        Synthesizes the provided text using the configured TTS provider and plays the audio on the leg.
+        When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
       tags: [Legs]
       requestBody:
         required: true
@@ -924,6 +930,9 @@ paths:
     post:
       operationId: ttsRoom
       summary: Synthesize speech and play it into a room
+      description: >
+        Synthesizes the provided text using the configured TTS provider and plays the audio into the room.
+        When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are stored on disk in `TTS_CACHE_DIR` and persist across restarts, without calling the external provider.
       tags: [Rooms]
       requestBody:
         required: true
@@ -1414,8 +1423,8 @@ paths:
       operationId: pprofIndex
       summary: pprof index
       description: >
-        Index of available Go runtime profiles. Only available when the server
-        is started with ENABLE_PPROF=true.
+        Index of available Go runtime profiles. Only available when built with
+        `-tags pprof` (e.g. `go build -tags pprof ./...`).
       tags: [Observability]
       responses:
         '200':
@@ -1431,7 +1440,7 @@ paths:
       summary: CPU profile
       description: >
         30-second CPU profile (duration configurable via ?seconds= query param).
-        Only available when ENABLE_PPROF=true.
+        Only available when built with `-tags pprof`.
       tags: [Observability]
       parameters:
         - name: seconds
@@ -1453,7 +1462,7 @@ paths:
     get:
       operationId: pprofHeap
       summary: Heap memory profile
-      description: Heap memory snapshot. Only available when ENABLE_PPROF=true.
+      description: Heap memory snapshot. Only available when built with `-tags pprof`.
       tags: [Observability]
       responses:
         '200':
@@ -1468,7 +1477,7 @@ paths:
     get:
       operationId: pprofGoroutine
       summary: Goroutine stack traces
-      description: All goroutine stack traces. Only available when ENABLE_PPROF=true.
+      description: All goroutine stack traces. Only available when built with `-tags pprof`.
       tags: [Observability]
       responses:
         '200':

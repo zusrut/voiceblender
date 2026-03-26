@@ -82,6 +82,18 @@ func main() {
 		log.Info("ElevenLabs TTS enabled (no default API key; per-request key required)")
 	}
 
+	// TTS cache (optional)
+	var ttsCache *tts.Cache
+	if cfg.TTSCacheEnabled {
+		c, err := tts.NewCache(cfg.TTSCacheDir, cfg.TTSCacheIncludeAPIKey)
+		if err != nil {
+			log.Error("failed to create TTS cache", "error", err)
+			os.Exit(1)
+		}
+		ttsCache = c
+		log.Info("TTS cache enabled", "dir", cfg.TTSCacheDir)
+	}
+
 	// S3 storage backend (optional)
 	var s3Backend storage.Backend
 	if cfg.S3Bucket != "" {
@@ -103,7 +115,7 @@ func main() {
 	metricsCollector := metrics.New(bus)
 
 	// HTTP API server
-	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhookReg, ttsProvider, s3Backend, metricsCollector, cfg, log)
+	apiSrv := api.NewServer(legMgr, roomMgr, engine, bus, webhookReg, ttsProvider, ttsCache, s3Backend, metricsCollector, cfg, log)
 	httpSrv := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: apiSrv,

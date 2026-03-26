@@ -237,16 +237,19 @@ func (s *Server) ttsRoom(w http.ResponseWriter, r *http.Request) {
 
 // resolveTTSProvider returns the TTS provider and API key for the request.
 // Returns nil provider if the required API key is missing.
+// When a TTS cache is configured, the provider is wrapped to serve cached results.
 func (s *Server) resolveTTSProvider(req ttsRequest) (tts.Provider, string) {
 	apiKey := req.APIKey
+	var provider tts.Provider
+	var name string
 	switch req.Provider {
 	case "aws":
 		// AWS Polly uses the default credential chain; api_key is optional
 		// (format: "ACCESS_KEY:SECRET_KEY" for per-request overrides).
-		return tts.NewAWS(s.Config.S3Region, s.Log), apiKey
+		provider, name = tts.NewAWS(s.Config.S3Region, s.Log), "aws"
 	case "google":
 		// Google Cloud TTS uses Application Default Credentials; api_key is optional.
-		return tts.NewGoogle(s.Log), apiKey
+		provider, name = tts.NewGoogle(s.Log), "google"
 	default:
 		// ElevenLabs (default).
 		if apiKey == "" {
@@ -255,6 +258,10 @@ func (s *Server) resolveTTSProvider(req ttsRequest) (tts.Provider, string) {
 		if apiKey == "" {
 			return nil, ""
 		}
-		return s.TTS, apiKey
+		provider, name = s.TTS, "elevenlabs"
 	}
+	if s.TTSCache != nil {
+		provider = s.TTSCache.WrapProvider(provider, name)
+	}
+	return provider, apiKey
 }

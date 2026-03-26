@@ -17,7 +17,7 @@ A Go service that bridges SIP and WebRTC voice calls with multi-party audio mixi
 - **STT** -- real-time speech-to-text with partial transcripts (ElevenLabs)
 - **AI Agent** -- attach a conversational AI agent to a leg or room (ElevenLabs, VAPI, Pipecat)
 - **Webhooks** -- real-time event delivery with HMAC-SHA256 signing and retry
-- **Prometheus metrics** -- operational metrics exposed at `GET /metrics` (active legs/rooms, call durations, disconnect reasons, Go runtime). See [API.md](API.md) for the full metric reference. Profiling via `go tool pprof` is available at `/debug/pprof/` when `ENABLE_PPROF=true`.
+- **Prometheus metrics** -- operational metrics exposed at `GET /metrics` (active legs/rooms, call durations, disconnect reasons, Go runtime). See [API.md](API.md) for the full metric reference. Profiling via `go tool pprof` is available at `/debug/pprof/` when built with `-tags pprof`.
 
 ## Quick Start
 
@@ -54,6 +54,9 @@ All configuration is via environment variables:
 | `S3_REGION` | `us-east-1` | AWS region |
 | `S3_ENDPOINT` | | Custom S3 endpoint (MinIO, etc.) |
 | `S3_PREFIX` | | Key prefix for S3 objects |
+| `TTS_CACHE_ENABLED` | `false` | Enable disk-backed TTS audio cache. Cached audio persists across restarts. |
+| `TTS_CACHE_DIR` | `/tmp/tts_cache` | Directory for cached TTS audio files (used when `TTS_CACHE_ENABLED=true`) |
+| `TTS_CACHE_INCLUDE_API_KEY` | `false` | Include API key in TTS cache key (set `true` if different keys map to different voice clones) |
 
 ## API Overview
 

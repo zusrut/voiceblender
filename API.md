@@ -393,6 +393,8 @@ Synthesize speech and play it on a leg.
 
 Events `tts.started` and `tts.finished` are emitted.
 
+**Caching:** When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are served from the disk cache stored in `TTS_CACHE_DIR`, skipping the external provider call. The cache persists across restarts; to clear it, delete the files in that directory. Set `TTS_CACHE_INCLUDE_API_KEY=true` to scope the cache per API key (needed when different keys access different voice clones).
+
 **Errors:**
 - `400` — Invalid JSON, missing text/voice, volume out of range
 - `404` — Leg not found
@@ -815,6 +817,8 @@ Synthesize speech and play it into a room.
 ```
 
 Events `tts.started` and `tts.finished` are emitted.
+
+**Caching:** When `TTS_CACHE_ENABLED=true`, identical requests (same text, voice, model, language, and prompt) are served from the disk cache stored in `TTS_CACHE_DIR`, skipping the external provider call. The cache persists across restarts; to clear it, delete the files in that directory. Set `TTS_CACHE_INCLUDE_API_KEY=true` to scope the cache per API key (needed when different keys access different voice clones).
 
 **Errors:**
 - `400` — Invalid JSON, missing text/voice, volume out of range
@@ -1350,6 +1354,9 @@ All errors return:
 | `S3_REGION` | `us-east-1` | AWS region for S3 |
 | `S3_ENDPOINT` | _(none)_ | Custom S3 endpoint for S3-compatible stores (MinIO, etc.) |
 | `S3_PREFIX` | _(none)_ | Key prefix for S3 objects (e.g. `recordings/`) |
+| `TTS_CACHE_ENABLED` | `false` | Enable disk-backed TTS audio cache. Cached audio is stored on disk and persists across restarts. |
+| `TTS_CACHE_DIR` | `/tmp/tts_cache` | Directory for cached TTS audio files. |
+| `TTS_CACHE_INCLUDE_API_KEY` | `false` | Include API key in TTS cache key (set `true` if different keys map to different voice clones) |
 
 ---
 
@@ -1438,7 +1445,11 @@ rate(voiceblender_call_duration_seconds_sum[5m])
 
 ### Profiling (pprof)
 
-Only available when the server is started with `ENABLE_PPROF=true`.
+Only available when the binary is built with the `pprof` build tag:
+
+```
+go build -tags pprof ./...
+```
 
 | Endpoint | Description |
 |----------|-------------|
