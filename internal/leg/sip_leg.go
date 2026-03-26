@@ -480,6 +480,17 @@ func (l *SIPLeg) readLoop() {
 			continue
 		}
 
+		// Skip packets that don't match the negotiated codec PT (e.g.
+		// comfort noise, keep-alive, or other non-audio PTs).
+		if pkt.PayloadType != l.rtpPT {
+			continue
+		}
+
+		// Skip empty payloads (some endpoints send marker-only packets).
+		if len(pkt.Payload) == 0 {
+			continue
+		}
+
 		// Decode audio payload
 		samples, err := l.decoder.Decode(pkt.Payload)
 		if err != nil {
