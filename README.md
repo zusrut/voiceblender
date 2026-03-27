@@ -193,13 +193,13 @@ See [TESTING.md](TESTING.md) for details.
 
 | Library | Description | Notes |
 |---------|-------------|-------|
-| [sipgo](https://github.com/emiago/sipgo) | SIP stack | |
-| [pion/webrtc](https://github.com/pion/webrtc) | WebRTC | |
+| [sipgo](https://github.com/emiago/sipgo) | SIP stack | Excellent SIP stack in go |
+| [pion/webrtc](https://github.com/pion/webrtc) | WebRTC | Nothing is better than Pion |
 | [go-chi](https://github.com/go-chi/chi) | HTTP router | |
 | [zaf/g711](https://github.com/zaf/g711) | G.711 codec | |
 | [gobwas/ws](https://github.com/gobwas/ws) | WebSocket | |
 | [go-audio/wav](https://github.com/go-audio/wav) | WAV encoding | |
-| [gopus](https://github.com/thesyncim/gopus) | Opus codec | Pure Go |
+| [gopus](https://github.com/thesyncim/gopus) | Opus codec | Thanks Marcelo! (Claude and Codex too! |
 | [go-mp3](https://github.com/hajimehoshi/go-mp3) | MP3 decoder | Pure Go |
 | [go-audio/audio](https://github.com/go-audio/audio) | Audio buffer types | |
 | [google/uuid](https://github.com/google/uuid) | UUID generation | |
