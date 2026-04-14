@@ -107,6 +107,27 @@ func WebhookFieldDescriptions() map[string]string {
 		"room.created.room_id": "Room identifier",
 		"room.deleted.room_id": "Room identifier",
 
+		// transfer (SIP REFER)
+		"leg.transfer_initiated.leg_id":           "Leg identifier",
+		"leg.transfer_initiated.kind":             "Transfer kind: \"blind\" or \"attended\"",
+		"leg.transfer_initiated.target":           "SIP URI to which the leg is being transferred",
+		"leg.transfer_initiated.replaces_leg_id":  "Leg whose dialog is replaced (attended transfer only)",
+		"leg.transfer_requested.leg_id":           "Leg identifier",
+		"leg.transfer_requested.kind":             "Transfer kind: \"blind\" or \"attended\"",
+		"leg.transfer_requested.target":           "SIP URI requested by the peer",
+		"leg.transfer_requested.replaces_call_id": "Call-ID present in the Refer-To Replaces parameter (attended only)",
+		"leg.transfer_requested.declined":         "True when the REFER was declined (e.g. SIP_REFER_AUTO_DIAL=false)",
+		"leg.transfer_progress.leg_id":            "Leg identifier",
+		"leg.transfer_progress.status_code":       "Provisional SIP status from the NOTIFY sipfrag",
+		"leg.transfer_progress.reason":            "Reason phrase",
+		"leg.transfer_completed.leg_id":           "Leg identifier",
+		"leg.transfer_completed.status_code":      "Final 2xx SIP status from the NOTIFY sipfrag",
+		"leg.transfer_completed.reason":           "Reason phrase",
+		"leg.transfer_failed.leg_id":              "Leg identifier",
+		"leg.transfer_failed.status_code":         "Final non-2xx SIP status (when applicable)",
+		"leg.transfer_failed.reason":              "Reason phrase",
+		"leg.transfer_failed.error":               "Local error message (when no SIP status applies)",
+
 		// stt
 		"stt.text.leg_id":   "Leg identifier",
 		"stt.text.room_id":  "Room identifier",
@@ -272,6 +293,24 @@ func RoutesMetadata() []RouteMeta {
 				400: {Description: "Not a SIP leg"},
 				404: {Description: "Leg not found"},
 				409: {Description: "Leg is not held"},
+			},
+		},
+		{
+			Method: "POST", Path: "/legs/{id}/transfer", OperationID: "transferLeg",
+			Summary: "Transfer a SIP leg via REFER (asynchronous)",
+			Description: "Asynchronously transfers a SIP leg. The HTTP call returns 202 as soon as the request is validated; " +
+				"the REFER is sent in the background and its outcome is surfaced through `leg.transfer_initiated` / " +
+				"`leg.transfer_progress` / `leg.transfer_completed` / `leg.transfer_failed` events. " +
+				"Blind transfer when `replaces_leg_id` is omitted; attended transfer when present (the named leg's dialog " +
+				"identity is embedded as a Replaces parameter per RFC 3891). On terminal 2xx the leg (and the replaces leg, " +
+				"if any) is hung up automatically.",
+			Tags:        []string{"Legs"},
+			RequestType: TransferRequest{},
+			Responses: map[int]ResponseMeta{
+				202: {Description: "Transfer request accepted for processing"},
+				400: {Description: "Missing or invalid target URI (including URIs without a host such as sip:)"},
+				404: {Description: "Leg not found"},
+				409: {Description: "Leg not connected, not a SIP leg, or replaces_leg_id is invalid"},
 			},
 		},
 		{

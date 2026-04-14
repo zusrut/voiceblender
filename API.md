@@ -293,6 +293,44 @@ Hang up a leg. Sends SIP BYE or closes the WebRTC connection.
 
 ---
 
+### POST /v1/legs/{id}/transfer
+
+Transfer a SIP leg to a third party using SIP REFER (RFC 3515). Supports both **blind** and **attended** flavours. The leg must be in `connected` state.
+
+- **Blind transfer** — `{"target": "sip:..."}`. We send REFER inside the leg's existing dialog; the peer dials the target. Progress is reported back to us via NOTIFY sipfrag and surfaces as `leg.transfer_progress` events. On terminal 2xx (`leg.transfer_completed`) the leg is hung up automatically.
+- **Attended transfer** — `{"target": "sip:...", "replaces_leg_id": "<uuid>"}`. The named leg must already be in `connected` state. Its dialog identity is embedded as a `Replaces` parameter on the Refer-To URI (RFC 3891) so the peer's INVITE replaces that dialog instead of creating a fresh one. Both legs are hung up on completion.
+
+**Request:**
+
+```json
+{
+  "target": "sip:bob@example.com",
+  "replaces_leg_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `target` | string | yes | SIP URI of the third party |
+| `replaces_leg_id` | string | no | Existing connected SIP leg whose dialog should be replaced (attended transfer). Omit for blind. |
+
+**Response:** `202 Accepted`
+
+```json
+{ "status": "transfer_initiated" }
+```
+
+The REST call returns immediately after validating the request. The REFER is sent in the background and its outcome (accepted, rejected, or network error) surfaces on the event bus.
+
+**Events emitted:** `leg.transfer_initiated` when the peer's 202 Accepted arrives, then `leg.transfer_progress` per NOTIFY sipfrag, then either `leg.transfer_completed` or `leg.transfer_failed`. If the peer rejects the REFER outright (e.g. 603 Decline), only `leg.transfer_failed` fires.
+
+**Errors:**
+- `400` — Missing or invalid `target` (including URIs without a host such as `sip:`)
+- `404` — Leg not found
+- `409` — Leg not connected, not a SIP leg, or `replaces_leg_id` is not a connected SIP leg
+
+---
+
 ### POST /v1/legs/{id}/dtmf
 
 Send DTMF digits on a leg (RFC 4733 telephone-event).
@@ -1684,6 +1722,11 @@ All event data uses typed structs with consistent field names. Events scoped to 
 | `leg.undeaf` | Leg undeafened | `leg_id` |
 | `leg.hold` | Leg put on hold (local or remote) | `leg_id`, `leg_type` |
 | `leg.unhold` | Leg taken off hold (local or remote) | `leg_id`, `leg_type` |
+| `leg.transfer_initiated` | We sent a SIP REFER for this leg | `leg_id`, `kind` (`blind`/`attended`), `target`, `replaces_leg_id` |
+| `leg.transfer_requested` | A peer sent us a SIP REFER targeting this leg | `leg_id`, `kind`, `target`, `replaces_call_id`, `declined` |
+| `leg.transfer_progress` | NOTIFY sipfrag for an in-flight transfer | `leg_id`, `status_code`, `reason` |
+| `leg.transfer_completed` | Transfer reached terminal 2xx; leg is hung up | `leg_id`, `status_code`, `reason` |
+| `leg.transfer_failed` | Transfer ended in non-2xx or local error | `leg_id`, `status_code`, `reason`, `error` |
 | `dtmf.received` | DTMF digit received | `leg_id`, `digit` |
 | `speaking.started` | Participant started speaking | `leg_id`, `room_id` (if in a room) |
 | `speaking.stopped` | Participant stopped speaking | `leg_id`, `room_id` (if in a room) |
