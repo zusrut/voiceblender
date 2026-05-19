@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/quic-go/webtransport-go"
 )
 
 type Server struct {
@@ -35,6 +36,10 @@ type Server struct {
 	Metrics   *metrics.Collector
 	Config    config.Config
 	Log       *slog.Logger
+
+	// MoQWebTransport is set by main.go when MoQ is enabled. The MoQ leg
+	// handler (s.moqLeg) returns 503 if this is nil.
+	MoQWebTransport *webtransport.Server
 
 	speakMu   sync.Mutex
 	speakDets map[string]*speaking.Detector
@@ -108,6 +113,7 @@ func (s *Server) routes() {
 		r.Post("/legs", s.createLeg)
 		r.Get("/legs", s.listLegs)
 		r.Get("/legs/websocket", s.wsLeg)
+		r.Connect("/legs/moq", s.moqLeg)
 		r.Get("/legs/{id}", s.getLeg)
 		r.Post("/legs/{id}/answer", s.answerLeg)
 		r.Post("/legs/{id}/early-media", s.earlyMediaLeg)
@@ -153,6 +159,11 @@ func (s *Server) routes() {
 		r.Delete("/rooms/{id}", s.deleteRoom)
 		r.Post("/rooms/{id}/legs", s.addLegToRoom)
 		r.Delete("/rooms/{id}/legs/{legID}", s.removeLegFromRoom)
+		r.Post("/rooms/{id}/bridges", s.createRoomBridge)
+		r.Get("/rooms/{id}/bridges", s.listRoomBridges)
+		r.Get("/rooms/{id}/bridges/{bridgeID}", s.getRoomBridge)
+		r.Patch("/rooms/{id}/bridges/{bridgeID}", s.updateRoomBridge)
+		r.Delete("/rooms/{id}/bridges/{bridgeID}", s.deleteRoomBridge)
 		r.Post("/rooms/{id}/play", s.playRoom)
 		r.Delete("/rooms/{id}/play/{playbackID}", s.stopPlayRoom)
 		r.Patch("/rooms/{id}/play/{playbackID}", s.volumePlayRoom)
